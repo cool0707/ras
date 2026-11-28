@@ -1089,3 +1089,137 @@ fn an_import_without_names_is_reported() {
     );
     assert!(diags.is_empty(), "{diags:#?}");
 }
+
+/// Events of a class of the project (`event`, spec §12.2.2): VBA's `Event` and `RaiseEvent`.
+#[test]
+fn events_of_a_class() {
+    let bell = r#"
+export class Bell {
+    event Rang(times: int, byref heard: int);
+    event Silent();
+
+    ring(times: int): int {
+        let heard = 0;
+        this.Rang(times, heard);
+        this.Silent();
+        return heard;
+    }
+}
+
+export class Listener {
+    private source: Bell;
+    total = 0;
+
+    constructor(from: Bell) {
+        this.source = from;
+    }
+
+    @on("source.Rang")
+    private heardIt(times: int, byref heard: int) {
+        this.total += times;
+        heard++;
+    }
+}
+"#;
+    let (diags, files) = compile(&[], &[("chime", bell)]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = module(&files, "Bell");
+    assert!(
+        code.contains("Public Event Rang(ByVal times As Long, ByRef heard As Long)"),
+        "{code}"
+    );
+    assert!(code.contains("Public Event Silent()"), "{code}");
+    assert!(
+        code.contains(
+            "Public Sub RAS_Raise_Rang(ByVal times As Long, ByRef heard As Long)
+    RaiseEvent Rang(times, heard)
+End Sub"
+        ),
+        "{code}"
+    );
+    assert!(
+        code.contains(
+            "    RaiseEvent Silent
+"
+        ),
+        "{code}"
+    );
+    assert!(code.contains("RAS_Raise_Rang times, heard"), "{code}");
+    let code = module(&files, "Listener");
+    assert!(code.contains("Private WithEvents source As Bell"), "{code}");
+    assert!(
+        code.contains("Private Sub source_Rang(ByVal times As Long, ByRef heard As Long)"),
+        "{code}"
+    );
+
+    // What an event cannot be; an event the class does not have.
+    let bad = r#"
+export class Bell {
+    event Rang(times?: int);
+    static event Loud();
+    event Body() {}
+}
+"#;
+    let (diags, _) = compile(&[], &[("chime", bad)]);
+    assert_eq!(codes(&diags), ["E0619", "E0619", "E0619"], "{diags:#?}");
+    let bad = r#"
+export class Bell {
+    event Rang();
+}
+export class Listener {
+    private source: Bell;
+    @on("source.Rung")
+    private rung() {}
+}
+"#;
+    let (diags, _) = compile(&[], &[("chime", bad)]);
+    assert_eq!(codes(&diags), ["E0611"], "{diags:#?}");
+}
+
+/// What the take-over of hand-written VBA relies on (spec §14.7): a procedure a sheet keeps
+/// as VBA is a member of the sheet, a constant made of constants is a `Const`, an omitted
+/// optional argument stays omitted when it is passed on, and a property is assigned, not
+/// passed by reference.
+#[test]
+fn kept_procedures_constants_and_omitted_arguments() {
+    let sheet = r#"
+vba`
+Public Sub Kept(ByVal n As Long)
+End Sub
+`;
+export declare function Kept(n: int): void;
+
+const header: int = 3;
+const first: int = header + 1;
+
+export function firstRow(): int {
+    return first;
+}
+"#;
+    let main = r#"
+class Store {
+    private items: object;
+    get item(key: string): any { return this.items[key]; }
+    set item(key: string, value: any) { this.items[key] = value; }
+    put(key: string, value: any) { this.item(key) = value; }
+}
+
+export function link(cell: Excel.Range, tip?: any) {
+    Sheet1.Kept(1);
+    Sheet1.hyperlinks.add(cell, "", screenTip: tip);
+    const cache: any = dynamicArray();
+    if (isAllocated(cache)) { new Store().put("a", cache); }
+}
+"#;
+    let (diags, files) = compile(&[("Sheet1", sheet)], &[("main", main)]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = module(&files, "Sheet1");
+    assert!(code.contains("Private Const first As Long = 4&"), "{code}");
+    let code = module(&files, "Main");
+    assert!(code.contains("Sheet1.Kept 1&"), "{code}");
+    assert!(code.contains("RAS_Opt(tip)"), "{code}");
+    assert!(code.contains("If RAS_IsAllocated(cache) Then"), "{code}");
+    let code = module(&files, "Store");
+    assert!(!code.contains("RAS_Assign item("), "{code}");
+    assert!(code.contains("item(key) = ras_t1"), "{code}");
+}

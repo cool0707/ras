@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "form": { "name": "frmProps", "caption": "プロパティ", "width": 180, "height": 120 },
+  "controls": [
+    { "id": "items", "name": "lstItems", "type": "ListBox", "left": 12, "top": 12, "width": 120, "height": 60, "columnCount": 2, "list": [["a", "1"], ["b", "2"], ["c", "3"]], "properties": { "MultiSelect": 1 } }
+  ]
+}

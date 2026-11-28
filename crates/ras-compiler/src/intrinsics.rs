@@ -28,7 +28,7 @@ intrinsics! {
     MathAbs, MathFloor, MathCeil, MathRound, MathBankersRound, MathTrunc, MathSqrt, MathPow, MathMin, MathMax,
     MathSin, MathCos, MathTan, MathAtan, MathLog, MathExp, MathRandom, MathSign, MathPi,
     // conversion / misc globals
-    ParseInt, ParseFloat, ToStr, ConsoleLog, IsNullish,
+    ParseInt, ParseFloat, ToStr, ConsoleLog, IsNullish, Like, LetValue, DynamicArray, IsAllocated,
     // application state (spec §10)
     FastMode, SuspendScreen, ResumeScreen, SuspendEvents, ResumeEvents, SuspendCalc, ResumeCalc,
     SuspendAlerts, ResumeAlerts, SuspendAll, ResumeAll, Status, Sleep, WaitUntil, YieldNow,
@@ -43,6 +43,8 @@ intrinsics! {
     FileOpen, FileClose, FileReset, FilePrint, FilePrintLine, FileWrite, FileWriteLine, FileInput,
     FileLineInput, FileInputString, FileGet, FilePut, FileSeek, FileLock, FileUnlock, FileWidth,
     FileRename,
+    // VBA arrays held in an `any` (spec §4.6)
+    Redim, RedimPreserve, Erase,
 }
 
 pub fn array_member(name: &str, dims: usize) -> Option<Intr> {
@@ -266,6 +268,10 @@ pub fn global_fn(name: &str) -> Option<Intr> {
     Some(match name {
         "parseInt" => ParseInt,
         "parseFloat" => ParseFloat,
+        "like" => Like,
+        "letValue" => LetValue,
+        "dynamicArray" => DynamicArray,
+        "isAllocated" => IsAllocated,
         "fastMode" => FastMode,
         "suspendScreen" => SuspendScreen,
         "resumeScreen" => ResumeScreen,
@@ -298,6 +304,9 @@ pub fn global_fn(name: &str) -> Option<Intr> {
         "unlock" => FileUnlock,
         "fileWidth" => FileWidth,
         "rename" => FileRename,
+        "redim" => Redim,
+        "redimPreserve" => RedimPreserve,
+        "erase" => Erase,
         _ => return None,
     })
 }
@@ -305,6 +314,7 @@ pub fn global_fn(name: &str) -> Option<Intr> {
 pub const GLOBAL_FNS: &[&str] = &[
     "parseInt",
     "parseFloat",
+    "like",
     "fastMode",
     "suspendScreen",
     "resumeScreen",
@@ -337,6 +347,9 @@ pub const GLOBAL_FNS: &[&str] = &[
     "unlock",
     "fileWidth",
     "rename",
+    "redim",
+    "redimPreserve",
+    "erase",
 ];
 
 /// Built-in namespaces usable as `Name.member`.

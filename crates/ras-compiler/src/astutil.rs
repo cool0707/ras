@@ -157,6 +157,11 @@ pub fn walk_expr<'a>(
             walk_expr(index, fs, fe);
         }
         ExprKind::FromEnd(x) => walk_expr(x, fs, fe),
+        ExprKind::Subscripts(xs) => {
+            for x in xs {
+                walk_expr(x, fs, fe);
+            }
+        }
         ExprKind::Range { start, end } => {
             for x in [start, end].into_iter().flatten() {
                 walk_expr(x, fs, fe);
@@ -237,6 +242,7 @@ fn visit_item<'a>(item: &'a Item, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>)
     match item {
         Item::Import(_) => {}
         Item::Fn(d) => visit_fn(d, v, tps),
+        Item::Accessor(a) => visit_fn(&a.func, v, tps),
         Item::Class(c) => {
             for d in &c.decorators {
                 visit_decorator(d, v, tps);
@@ -317,6 +323,7 @@ fn visit_item<'a>(item: &'a Item, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>)
             }
         }
         Item::Stmt(s) => visit_stmt(s, v, tps),
+        Item::RawVba(_) => {}
     }
 }
 
@@ -552,6 +559,11 @@ fn visit_expr<'a>(e: &'a Expr, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>) {
             visit_expr(index, v, tps);
         }
         ExprKind::FromEnd(x) => visit_expr(x, v, tps),
+        ExprKind::Subscripts(xs) => {
+            for x in xs {
+                visit_expr(x, v, tps);
+            }
+        }
         ExprKind::Range { start, end } => {
             for x in [start, end].into_iter().flatten() {
                 visit_expr(x, v, tps);

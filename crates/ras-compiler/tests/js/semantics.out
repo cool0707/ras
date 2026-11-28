@@ -23,3 +23,7 @@ errval 1 false false true false true a 13
 range 50 20,30,40 10,20 10,20 0 10,20 2,8,99 f bc abcd ef  40 7 0 3 100
 step 10,30,50 20,40 50,40,30,20,10 10,20,30,40,50 5 2
 transpose 3 2 5 7 0 7 0
+rest h1:end 4:1+b+true+end 1:end 3 5 a,2.5,1,9,
+like true false true true true false true true false true false
+dbnull true false false true true true Null 1 d true []
+event 1 1 5 0

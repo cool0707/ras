@@ -301,6 +301,20 @@ declare namespace Office {
     }
 
     /**
+     * 図形の塗りつぶしの種類を表す。
+     * @see https://learn.microsoft.com/office/vba/api/office.msofilltype
+     */
+    enum MsoFillType {
+        msoFillBackground = 5,
+        msoFillGradient = 3,
+        msoFillMixed = -2,
+        msoFillPatterned = 2,
+        msoFillPicture = 6,
+        msoFillSolid = 1,
+        msoFillTextured = 4
+    }
+
+    /**
      * 図形の種類を表す。
      * @see https://learn.microsoft.com/office/vba/api/office.msoshapetype
      */

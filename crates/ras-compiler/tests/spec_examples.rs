@@ -231,6 +231,10 @@ export function demo() {
         "    Set r = Sheet1.Range(\"A:A\").Find(\"x\",,, xlWhole,,, True)\n",
     );
     assert_contains(&m, "    MsgBox \"hi\",, \"t\"\n");
+    // A late-bound call: VBA finds the parameters by name.
+    let late = "export function t(o: object) { o.foo(1, b: 2, c: \"x\"); }\n";
+    let (_, out) = compile_with(&[("main", late)], config());
+    assert_contains(&code(&out, "Main"), "o.foo 1&, b:=2&, c:=\"x\"\n");
 
     let decl = "function f(a: int, b: int = 2, c: string = \"x\"): string { return c; }\nfunction g(): void {}\n";
     let cases: &[(&str, &str)] = &[
@@ -241,7 +245,6 @@ export function demo() {
         ("f(c: \"q\");", "E0414"),
         ("g(x: 1);", "E0412"),
         ("const h = (x: int) => x; h(x: 1);", "E0411"),
-        ("const o: any = null; o.foo(a: 1);", "E0411"),
         ("const xs = [1]; xs.push(value: 2);", "E0411"),
         ("f(a: \"s\");", "E0301"),
     ];
@@ -251,6 +254,128 @@ export function demo() {
         assert!(
             codes.contains(want),
             "{body}: expected {want}, got {codes:?}"
+        );
+    }
+}
+
+#[test]
+fn spec_3_5_rest_parameters() {
+    // The example of the specification (the checkout may have CRLF line endings).
+    let doc = include_str!("../../../docs/RAS_Language_Specification.md").replace("\r\n", "\n");
+    let start = doc.find("export function joinPath(").expect("§3.6 example");
+    let example = &doc[start..start + doc[start..].find("```").unwrap()];
+    let (_, out) = compile(&[("paths", example)]);
+    let start = doc.find("Public Function joinPath(").expect("§3.6 output");
+    let shown = &doc[start..start + doc[start..].find("```").unwrap()];
+    assert_contains(&code(&out, "Paths"), shown);
+
+    let src = r#"
+export function joinPath(first: string, ...rest: any[]): string {
+    let s = first;
+    for (const p of rest) {
+        s += "\\" + p;
+    }
+    return s;
+}
+function count(prefix: string = "n", ...parts: any[]): string {
+    return prefix + parts.length + parts.join(",");
+}
+class Bag {
+    all: any[];
+    constructor(label: string, ...parts: any[]) { this.all = parts; }
+    add(...more: any[]): int {
+        for (const m of more) this.all.push(m);
+        return this.all.length;
+    }
+}
+export function demo(): string {
+    const b = new Bag("b", 1, "two");
+    b.add();
+    b.add(3, null);
+    return joinPath("C:", "a", 1) + count() + count("x", 2.5) + count(prefix: "y");
+}
+"#;
+    let mut cfg = config();
+    cfg.opt_override = Some(0);
+    let (_, out) = compile_with(&[("main", src)], cfg);
+    let m = code(&out, "Main");
+    // The `ParamArray` is copied into a Variant (an `any[]`): VBA does not let it be passed on
+    // by reference, which the array operations do.
+    assert_contains(
+        &m,
+        "Public Function joinPath(ByVal first As String, ParamArray rest() As Variant) As String
+    Dim ras_rest As Variant
+    Dim s As String
+    Dim ras_i As Long
+    Dim p As Variant
+    Dim ras_y1 As Long
+
+    ras_rest = rest
+    s = first
+    For ras_i = 0 To RAS_Len(ras_rest) - 1&
+",
+    );
+    // No `Optional` next to a `ParamArray`: RAS callers pass the defaults themselves.
+    assert_contains(
+        &m,
+        "Private Function count(ByVal prefix As String, ParamArray parts() As Variant) As String\n",
+    );
+    assert_contains(
+        &m,
+        "count = prefix & CStr(RAS_Len(ras_parts)) & RAS_Join(ras_parts, \",\")\n",
+    );
+    // A constructor gets the array from its factory.
+    assert_contains(
+        &m,
+        "Public Function New_Bag(ByVal label As String, ParamArray parts() As Variant) As Bag
+    Dim ras_parts As Variant
+
+    ras_parts = parts
+    Set New_Bag = New Bag
+    New_Bag.RAS_Init label, ras_parts
+End Function
+",
+    );
+    let bag = code(&out, "Bag");
+    assert_contains(
+        &bag,
+        "Public Sub RAS_Init(ByVal label As String, ByVal parts As Variant)\n",
+    );
+    assert_contains(
+        &bag,
+        "Public Function add(ParamArray more() As Variant) As Long\n",
+    );
+    assert_contains(
+        &m,
+        "    Set b = Main.New_Bag(\"b\", 1&, \"two\")\n    b.add\n    b.add 3&, Empty\n",
+    );
+    assert_contains(
+        &m,
+        "joinPath(\"C:\", \"a\", 1&) & count(\"n\") & count(\"x\", 2.5#) & count(\"y\")\n",
+    );
+
+    let cases: &[(&str, &str)] = &[
+        ("function f(...a: any[], b: int) {}", "E0152"),
+        ("function f(...a: int[]) {}", "E0152"),
+        ("function f(...a: any) {}", "E0152"),
+        ("function f(byref ...a: any[]) {}", "E0152"),
+        ("function f(...a: any[] = []) {}", "E0152"),
+        ("interface I { f(...a: any[]): void; }", "E0152"),
+        ("function g() { const h = (...a: any[]) => 1; }", "E0152"),
+        (
+            "function f(n: int, ...a: any[]) {}\nfunction g() { f(); }",
+            "E0402",
+        ),
+        (
+            "function f(n: int, ...a: any[]) {}\nfunction g() { f(1, a: 2); }",
+            "E0412",
+        ),
+    ];
+    for (text, want) in cases {
+        let codes = error_codes(&[("main", text)]);
+        assert!(
+            codes.contains(want),
+            "{text}: expected {want}, got {codes:?}"
         );
     }
 }
@@ -1632,5 +1757,299 @@ export function bad(m: FileIO.OpenMode) {
     assert_eq!(
         error_codes(&[("Main", bad)]),
         vec!["E0416", "E0406", "E0406", "E0381"]
+    );
+}
+
+#[test]
+fn spec_15_3_3_like_and_db_null() {
+    // The example of the specification (the checkout may have CRLF line endings).
+    let doc = include_str!("../../../docs/RAS_Language_Specification.md").replace("\r\n", "\n");
+    let start = doc
+        .find("export function isCode(s: string): boolean {")
+        .expect("§15.3.3 example");
+    let example = &doc[start..start + doc[start..].find("```").unwrap()];
+    let (_, out) = compile(&[("codes", example)]);
+    let start = doc
+        .find("Public Function isCode(ByVal s As String) As Boolean")
+        .expect("§15.3.3 output");
+    let shown = &doc[start..start + doc[start..].find("```").unwrap()];
+    assert_contains(&code(&out, "Codes"), shown);
+
+    let src = r#"
+export function isCode(s: string, v: any): boolean {
+    if (like(s, "[A-Z]##-*") && !like(s + "x", "*[!0-9a-z]x")) return true;
+    return like(v, "?*");
+}
+export function blank(rs: object): any {
+    rs.fields("memo").value = dbNull;
+    let v: any = dbNull;
+    if (isNull(v) || v == null) v = null;
+    return isNull(rs.fields("memo").value) ? dbNull : v;
+}
+"#;
+    let (_, out) = compile(&[("Main", src)]);
+    let vba = code(&out, "Main");
+    assert!(
+        vba.starts_with("Option Explicit\nOption Compare Binary\n"),
+        "{vba}"
+    );
+    for want in [
+        "s Like \"[A-Z]##-*\"",
+        "Not (s & \"x\" Like \"*[!0-9a-z]x\")",
+        "isCode = v Like \"?*\"\n",
+        "rs.fields(\"memo\").Value = Null\n",
+        "    v = Null\n",
+        "IsNull(v)",
+        "RAS_IsNullish(v)",
+        "    v = Empty\n",
+        "blank = Null\n",
+    ] {
+        assert_contains(&vba, want);
+    }
+    // `like` takes two strings; `dbNull` is a value, not a variable.
+    assert_eq!(
+        error_codes(&[("Main", "export function f() { like(\"a\"); }\n")]),
+        vec!["E0402"]
+    );
+    assert!(!error_codes(&[("Main", "export function f() { dbNull = 1; }\n")]).is_empty());
+}
+
+/// VBA arrays held in an `any` (spec §4.6): several subscripts, `redim` / `redimPreserve` / `erase`.
+#[test]
+fn spec_4_6_vba_arrays_in_any() {
+    let src = r#"
+let shared: any;
+
+class Holder {
+    grid: any;
+    fill(n: int) {
+        redim(this.grid, 1, n, 1, 2);
+        this.grid[1, 2] = "x";
+        this.grid[1, 2] += "y";
+    }
+}
+
+function make(n: int): any {
+    let a: any;
+    redim(a, 1, n);
+    for (let i = 1; i <= n; i++) {
+        a[i] = i * 10;
+    }
+    return a;
+}
+
+function total(v: any): int {
+    let t = 0;
+    for (const x of v) {
+        t += x;
+    }
+    return t;
+}
+
+function grow(byref v: any) {
+    redimPreserve(v, lBound(v), uBound(v) + 1);
+    v[uBound(v)] = 99;
+}
+
+function next(): int {
+    return 1;
+}
+
+export function run(rows: int, cols: int, o: object, c: cellValue): boolean {
+    let a: any;
+    redim(a, 1, rows, 0, cols - 1);
+    a[1, 0] = 5;
+    a[next(), 0] += 1;
+    const b = a;
+    let m = make(3);
+    grow(m);
+    redim(shared, 0, 1);
+    redimPreserve(shared, -1, 2);
+    let k: any;
+    redim(k, 1, 2, 1, 2, next(), 2);
+    k[2, 2, 2] = o[1, 2];
+    const n = total(m) + uBound(a, 2) + lBound(k, 3);
+    erase(a);
+    erase(shared);
+    return isArray(a) && isError(c[1, 2]) && b[1, 0] == null && n > 0;
+}
+"#;
+    // The example of the specification.
+    let table = "function fillTable(rows: int, cols: int): any {\n    let t: any;\n    redim(t, 1, rows, 1, cols);\n    for (let r = 1; r <= rows; r++) {\n        t[r, 1] = r;\n        t[r, cols] = t[r, 1] * 2;\n    }\n    redimPreserve(t, 1, rows, 1, cols + 1);\n    return t;\n}\n";
+    let (_, out) = compile(&[("table", table)]);
+    let doc = include_str!("../../../docs/RAS_Language_Specification.md").replace("\r\n", "\n");
+    let start = doc
+        .find("Private Function fillTable(")
+        .expect("§4.6 example");
+    let end = start + doc[start..].find("End Function\n").unwrap() + "End Function\n".len();
+    assert_contains(&code(&out, "Table"), &doc[start..end]);
+
+    let (_, out) = compile(&[("arr", src)]);
+    let c = code(&out, "Arr");
+    for want in [
+        // The array is a value: `RAS_Assign` copies it (to a variable, as a return value).
+        "    ReDim a(1 To n)\n",
+        "    RAS_Assign ras_t1, a\n",
+        "Private Function total(ByVal v As Variant) As Long\n",
+        "    For Each x In v\n",
+        "    ReDim Preserve v(LBound(v) To UBound(v) + 1&)\n    v(UBound(v)) = 99&\n",
+        "    ReDim a(1 To rows_, 0 To cols - 1&)\n    a(1, 0) = 5&\n",
+        // The subscripts of a compound assignment are evaluated once.
+        // (The element may be one of a Dictionary: it is not passed by reference.)
+        "    ras_t1 = next_()\n    RAS_Assign ras_t2, a(ras_t1, 0) + 1&\n    If IsObject(ras_t2) Then\n        Set a(ras_t1, 0) = ras_t2\n    Else\n        a(ras_t1, 0) = ras_t2\n    End If\n",
+        "    RAS_Assign b, a\n",
+        "    RAS_Assign m, make(3&)\n    grow m\n",
+        "    ReDim shared_(0 To 1)\n    ReDim Preserve shared_(-1 To 2)\n",
+        "    ReDim k(1 To 2, 1 To 2, next_() To 2)\n",
+        "        Set k(2, 2, 2) = ras_t",
+        "UBound(a, 2&) + LBound(k, 3&)\n",
+        "    Erase a\n    Erase shared_\n",
+        "IsArray(a)",
+        "IsError(c(1, 2))",
+        "RAS_IsNullish(b(1, 0))",
+    ] {
+        assert_contains(&c, want);
+    }
+    // A field is the class's own variable: its elements are written in place.
+    let h = code(&out, "Holder");
+    assert_contains(
+        &h,
+        "    ReDim grid(1 To n, 1 To 2)\n    grid(1, 2) = \"x\"\n    RAS_Assign ras_t1, grid(1, 2) + \"y\"\n    If IsObject(ras_t1) Then\n        Set grid(1, 2) = ras_t1\n",
+    );
+
+    // A typed array takes the bounds VBA code gives it (`Dim xs() As Long`).
+    let (_, out) = compile(&[(
+        "typed",
+        "export function f(n: int): int {\n    let xs: int[] = [];\n    redim(xs, 1, n);\n    xs[n] = 5;\n    redimPreserve(xs, 1, n + 1);\n    const last = xs[uBound(xs)];\n    erase(xs);\n    return last;\n}\n",
+    )]);
+    let typed = code(&out, "Typed");
+    assert_contains(
+        &typed,
+        "    ReDim xs(1 To n)\n    xs(n) = 5&\n    ReDim Preserve xs(1 To n + 1&)\n",
+    );
+    assert_contains(&typed, "    Erase xs\n");
+
+    let many = format!("let a: any; redim(a{});", ", 0, 1".repeat(61));
+    for (body, codes) in [
+        // Several subscripts are for `any` only.
+        ("const xs = [1, 2]; xs[0, 1] = 1;", vec!["E0417"]),
+        (
+            "const m = new Array<int>(2, 2); m[0, 1] = 1;",
+            vec!["E0417"],
+        ),
+        ("const s = \"ab\"; const c = s[0, 1];", vec!["E0417"]),
+        (
+            "const t: [int, int] = [1, 2]; const c = t[0, 1];",
+            vec!["E0417"],
+        ),
+        (
+            "const m = new Map<string, int>(); const c = m[\"a\", \"b\"];",
+            vec!["E0417"],
+        ),
+        // `redim` takes a variable — an `any` or a typed array, with the bounds of each of
+        // its dimensions — and pairs of bounds.
+        ("let xs: int[] = []; redim(xs, 0, 3, 0, 1);", vec!["E0418"]),
+        (
+            "let m = new Array<int>(2, 2); redim(m, 0, 3);",
+            vec!["E0418"],
+        ),
+        ("let s = \"\"; redimPreserve(s, 1, 2);", vec!["E0418"]),
+        ("let a: any; redim(a, 1);", vec!["E0418"]),
+        ("let a: any; redim(a);", vec!["E0418"]),
+        ("redim();", vec!["E0418"]),
+        ("redim(make(1), 1, 2);", vec!["E0418"]),
+        ("let a: any; redim(a[1], 1, 2);", vec!["E0418"]),
+        ("let a: any; redim(a, 1, \"x\");", vec!["E0301"]),
+        ("let a: any; erase(a, 1);", vec!["E0402"]),
+        ("const c: any = 1; redim(c, 1, 2);", vec!["E0323"]),
+        // They are statements.
+        ("let a: any; const x = redim(a, 1, 2);", vec!["E0370"]),
+        (many.as_str(), vec!["E0418"]),
+    ] {
+        let src =
+            format!("function make(n: int): any {{ return n; }}\nfunction f() {{ {body} }}\n");
+        assert_eq!(error_codes(&[("f", &src)]), codes, "{body}");
+    }
+}
+
+const SPEC_3_5_SETTINGS: &str = r#"
+let cache: int;
+let names: string[] = ["", "", ""];
+
+/** 合計。 */
+export get total(): int {
+    return cache;
+}
+export set total(v: int) {
+    cache = v;
+}
+
+// 引数のあるプロパティ: setter の最後の引数が、代入された値
+export get label(i: int): string {
+    return names[i];
+}
+export set label(i: int, value: string) {
+    names[i] = value;
+}
+
+export function demo(ws: Excel.Worksheet, o: object) {
+    total = 3;
+    total += 1;
+    label(0) = "x";
+    label(0) += "y";
+    ws.cells(1, 2) = total;
+    o.prop(1) = label(0);
+}
+"#;
+
+#[test]
+fn spec_3_5_accessors() {
+    let main = "export function run() {\n    Settings.total = Settings.total + 1;\n    Settings.label(2) = \"z\";\n}\n";
+    let (_, out) = compile(&[("settings", SPEC_3_5_SETTINGS), ("main", main)]);
+    let m = code(&out, "Settings");
+    assert_contains(
+        &m,
+        "' 合計。\nPublic Property Get total() As Long\nAttribute total.VB_Description = \"合計。\"\n    total = cache\nEnd Property\n\nPublic Property Let total(ByVal v As Long)\n    cache = v\nEnd Property\n",
+    );
+    assert_contains(
+        &m,
+        "Public Property Get label(ByVal i As Long) As String\n    label = names(i)\nEnd Property\n\nPublic Property Let label(ByVal i As Long, ByVal value_ As String)\n    names(i) = value_\nEnd Property\n",
+    );
+    assert_contains(
+        &m,
+        "    total = 3&\n    total = total + 1&\n    label(0&) = \"x\"\n    label(0&) = label(0&) & \"y\"\n    ws.Cells(1&, 2&) = total\n    o.prop(1&) = label(0&)\n",
+    );
+    assert_contains(
+        &code(&out, "Main"),
+        "    Settings.total = Settings.total + 1&\n    Settings.label(2&) = \"z\"\n",
+    );
+    // Read-only, write-only and mismatched accessors (spec §3.6).
+    assert_eq!(
+        error_codes(&[(
+            "m",
+            "get ro(): int { return 1; }\nexport function f() { ro = 2; }\n"
+        )]),
+        vec!["E0323"]
+    );
+    assert_eq!(
+        error_codes(&[(
+            "m",
+            "let n = 0;\nset wo(v: int) { n = v; }\nexport function f(): int { return wo; }\n"
+        )]),
+        vec!["E0326"]
+    );
+    assert_eq!(
+        error_codes(&[(
+            "m",
+            "let n = 0;\nget p(): int { return n; }\nset p(v: string) { n = v.length; }\n"
+        )]),
+        vec!["E0155"]
+    );
+    assert_eq!(
+        error_codes(&[(
+            "m",
+            "export function f() { Sheet1.range(\"A1\").address(true) = \"x\"; }\n"
+        )]),
+        vec!["E0325"]
     );
 }

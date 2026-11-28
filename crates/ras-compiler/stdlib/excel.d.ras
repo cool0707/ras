@@ -212,24 +212,28 @@ declare namespace Excel {
         /**
          * アクティブ シート上のセルまたはセル範囲を返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.application.range
+         * @property
          */
         Range(cell1: any, cell2?: any): Range;
 
         /**
          * アクティブ シートのセルを返す。引数なしなら全セル。
          * @see https://learn.microsoft.com/office/vba/api/excel.application.cells
+         * @property
          */
         Cells(row?: any, col?: any): Range;
 
         /**
          * アクティブ シートの行を返す。引数なしなら全行。
          * @see https://learn.microsoft.com/office/vba/api/excel.application.rows
+         * @property
          */
         Rows(index?: any): Range;
 
         /**
          * アクティブ シートの列を返す。引数なしなら全列。
          * @see https://learn.microsoft.com/office/vba/api/excel.application.columns
+         * @property
          */
         Columns(index?: any): Range;
 
@@ -970,24 +974,28 @@ declare namespace Excel {
         /**
          * シート上のセルを返す。引数なしなら全セル。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.cells
+         * @property
          */
         Cells(row?: any, col?: any): Range;
 
         /**
          * セルまたはセル範囲を返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.range
+         * @property
          */
         Range(cell1: any, cell2?: any): Range;
 
         /**
          * シートの行を返す。引数なしなら全行。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.rows
+         * @property
          */
         Rows(index?: any): Range;
 
         /**
          * シートの列を返す。引数なしなら全列。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.columns
+         * @property
          */
         Columns(index?: any): Range;
 
@@ -1233,12 +1241,14 @@ declare namespace Excel {
         /**
          * 既定メンバー（Item）。`rng(1, 2)` の形で、範囲の左上を基準にしたセルを返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.range.item
+         * @property
          */
         (row: any, col?: any): Range;
 
         /**
          * 範囲の左上を基準にした位置のセルを返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.range.item
+         * @property
          */
         Item(rowIndex: any, columnIndex?: any): Range;
 
@@ -1301,12 +1311,14 @@ declare namespace Excel {
         /**
          * 範囲内の行を返す。引数なしなら行の集まりとしての範囲。
          * @see https://learn.microsoft.com/office/vba/api/excel.range.rows
+         * @property
          */
         Rows(index?: any): Range;
 
         /**
          * 範囲内の列を返す。引数なしなら列の集まりとしての範囲。
          * @see https://learn.microsoft.com/office/vba/api/excel.range.columns
+         * @property
          */
         Columns(index?: any): Range;
 
@@ -1328,18 +1340,21 @@ declare namespace Excel {
         /**
          * 範囲内のセルを返す。引数なしなら範囲そのもの。
          * @see https://learn.microsoft.com/office/vba/api/excel.range.cells
+         * @property
          */
         Cells(row?: any, col?: any): Range;
 
         /**
          * 指定した行数・列数だけずらした範囲を返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.range.offset
+         * @property
          */
         Offset(rowOffset?: any, columnOffset?: any): Range;
 
         /**
          * 左上を固定したまま、行数・列数を変えた範囲を返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.range.resize
+         * @property
          */
         Resize(rowSize?: any, columnSize?: any): Range;
 
@@ -1718,6 +1733,7 @@ declare namespace Excel {
         /**
          * この範囲を基準にした相対参照でセル範囲を返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.range.range
+         * @property
          */
         Range(cell1: any, cell2?: any): Range;
 
@@ -5562,24 +5578,28 @@ declare const WorksheetFunction: Excel.WorksheetFunction;
 /**
  * アクティブ シート上のセルまたはセル範囲を返す。
  * @see https://learn.microsoft.com/office/vba/api/excel.application.range
+ * @property
  */
 declare function Range(cell1: any, cell2?: any): Excel.Range;
 
 /**
  * アクティブ シートのセルを返す。引数なしなら全セル。
  * @see https://learn.microsoft.com/office/vba/api/excel.application.cells
+ * @property
  */
 declare function Cells(row?: any, col?: any): Excel.Range;
 
 /**
  * アクティブ シートの行を返す。引数なしなら全行。
  * @see https://learn.microsoft.com/office/vba/api/excel.application.rows
+ * @property
  */
 declare function Rows(index?: any): Excel.Range;
 
 /**
  * アクティブ シートの列を返す。引数なしなら全列。
  * @see https://learn.microsoft.com/office/vba/api/excel.application.columns
+ * @property
  */
 declare function Columns(index?: any): Excel.Range;
 

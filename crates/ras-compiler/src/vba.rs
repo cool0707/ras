@@ -18,6 +18,8 @@ pub enum VExpr {
     Bin(&'static str, Box<VExpr>, Box<VExpr>),
     /// An omitted optional argument (`f(a, , c)`).
     Missing,
+    /// A named argument of a late-bound call (`o.Add Name:="x"`).
+    Named(String, Box<VExpr>),
 }
 
 pub fn lit(s: impl Into<String>) -> VExpr {
@@ -63,6 +65,10 @@ impl VExpr {
             VExpr::Lit(s) if s == "False" => lit("True"),
             other => VExpr::Not(Box::new(other)),
         }
+    }
+
+    pub fn is_name(&self, text: &str) -> bool {
+        matches!(self, VExpr::Name(s) if s == text)
     }
 
     pub fn is_lit(&self, text: &str) -> bool {
@@ -116,6 +122,7 @@ impl VExpr {
             | VExpr::Missing => 14,
             VExpr::Neg(_) => 12,
             VExpr::Not(_) => 5,
+            VExpr::Named(..) => 0,
             VExpr::Bin(op, ..) => bin_prec(op),
         }
     }
@@ -158,6 +165,11 @@ impl VExpr {
             VExpr::Neg(x) => {
                 out.push('-');
                 x.write_operand(out, x.prec() <= 12);
+            }
+            VExpr::Named(name, value) => {
+                out.push_str(name);
+                out.push_str(":=");
+                value.write(out);
             }
             VExpr::Bin(op, l, r) => {
                 let p = bin_prec(op);
@@ -328,6 +340,8 @@ pub struct VParam {
     pub ty: String,
     pub is_array: bool,
     pub optional_default: Option<String>,
+    /// `ParamArray name() As Variant`: the rest parameter of a function (spec §3.5).
+    pub param_array: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -376,6 +390,8 @@ pub struct VModule {
     /// Module-level declarations (Declare, Const, variables, Type, Enum), verbatim blocks.
     pub decls: Vec<String>,
     pub procs: Vec<VProc>,
+    /// Procedures written as they are, after the generated ones (` vba`…` ` blocks).
+    pub raw_procs: Vec<String>,
     /// RAS source files (relative paths) that contributed to this module.
     pub sources: Vec<String>,
     pub leading_comments: Vec<String>,
@@ -391,6 +407,7 @@ impl VModule {
             implements: Vec::new(),
             decls: Vec::new(),
             procs: Vec::new(),
+            raw_procs: Vec::new(),
             sources: Vec::new(),
             leading_comments: Vec::new(),
         }
@@ -620,6 +637,10 @@ impl Printer<'_> {
             .iter()
             .map(|a| {
                 let mut s = String::new();
+                if a.param_array {
+                    let _ = write!(s, "ParamArray {}() As Variant", a.name);
+                    return s;
+                }
                 if a.optional_default.is_some() {
                     s.push_str("Optional ");
                 }
@@ -781,6 +802,14 @@ pub fn print_module(m: &VModule, opts: &PrintOptions) -> Printed {
             p.raw_line("");
         }
         p.proc(proc);
+    }
+    for raw in &m.raw_procs {
+        if p.line > 0 {
+            p.raw_line("");
+        }
+        for l in raw.trim_matches(['\r', '\n']).lines() {
+            p.raw_line(l);
+        }
     }
     Printed {
         text: p.out,

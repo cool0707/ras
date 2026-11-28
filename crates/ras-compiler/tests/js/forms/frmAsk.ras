@@ -1,6 +1,8 @@
 // `new frmAsk(...)` / `showModal()` / `this.close(value)` (spec §14.11.9).
 let question = "";
 let asked = 0;
+/** 他のモジュールから `frmAsk.note` / `f.note` で読み書きできる（インスタンスごと）。 */
+export let note = "none";
 
 function constructor(q: string, initial: string = "") {
     question = q;

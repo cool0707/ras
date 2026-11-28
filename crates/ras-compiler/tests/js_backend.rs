@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use ras_compiler::{
-    analyze, build_js, form_source, Config, FormDecl, JsOutput, ModuleKind, Program, SourceInput,
+    analyze, build_js, form_source, object_source, Config, FormDecl, JsOutput, ModuleKind, Program,
+    SourceInput,
 };
 
 fn compile(files: &[(&str, &str)]) -> (Program, JsOutput) {
@@ -925,6 +926,9 @@ const ASK_MAIN: &str = r#"export function run() {
     const a = new frmAsk("A");
     const b = new frmAsk("B");
     console.log(`${a.describe()} ${b.describe()}`);
+    a.note = "first";
+    b.note += "+b";
+    console.log(`notes: ${a.note} ${b.note} ${frmAsk.note}`);
     console.log(`cancelled: [${a.showModal()}]`);
     console.log(`closed: [${b.showModal()}]`);
     frmAsk.txtAnswer.text = "既定";
@@ -990,6 +994,7 @@ hide #1
 bye 色
 color: 色=赤
 A/0 B/0
+notes: first none+b none
 show frmAsk#2 \"A\" modal=true
 asking A (1)
 hide #2
@@ -1665,6 +1670,393 @@ show modal=false
 > (DoEvents) click btnCancel
 waitUntil true
 timeout false
+";
+    assert_eq!(stdout, expected, "{stderr}");
+}
+
+const VBA_ARRAYS: &str = r#"let shared: any;
+let calls = 0;
+
+class Holder {
+    grid: any;
+    fill(n: int) {
+        redim(this.grid, 1, n, 1, 2);
+        this.grid[1, 2] = "x";
+        this.grid[1, 2] += "y";
+    }
+}
+
+function make(n: int): any {
+    let a: any;
+    redim(a, 1, n);
+    for (let i = 1; i <= n; i++) {
+        a[i] = i * 10;
+    }
+    return a;
+}
+
+function total(v: any): int {
+    let t = 0;
+    for (const x of v) {
+        t += x;
+    }
+    return t;
+}
+
+function grow(byref v: any) {
+    redimPreserve(v, lBound(v), uBound(v) + 1);
+    v[uBound(v)] = 99;
+}
+
+function poke(v: any) {
+    v[1] = -1;
+}
+
+function next(): int {
+    calls++;
+    return 1;
+}
+
+function basics() {
+    let a: any;
+    const n = 3;
+    redim(a, 1, n);
+    a[1] = "a";
+    console.log(typeName(a), lBound(a), uBound(a), a[2] == null, a[1], isArray(a));
+    // Several dimensions; the subscripts of `+=` are evaluated once.
+    redim(a, 1, n, 0, n - 1);
+    a[1, 0] = 5;
+    a[next(), 0] += 1;
+    console.log(a[1, 0], lBound(a, 2), uBound(a, 2), calls);
+    // An array is a value: a copy on assignment and for an `any` parameter; `byref` shares it.
+    const b = a;
+    b[1, 0] = 7;
+    let m = make(3);
+    poke(m);
+    grow(m);
+    console.log(a[1, 0], b[1, 0], total(m), uBound(m), m[1]);
+    // `redimPreserve` keeps the elements in their order (the lower bound may change too).
+    redim(shared, 0, 1);
+    shared[0] = 1;
+    redimPreserve(shared, -1, 2);
+    console.log(lBound(shared), uBound(shared), shared[-1], shared[0] == null);
+    // `for...of` visits every element, the first subscript fastest; only the last dimension is resized.
+    let t: any;
+    redim(t, 1, 2, 1, 2);
+    t[1, 1] = "a"; t[2, 1] = "b"; t[1, 2] = "c"; t[2, 2] = "d";
+    let s = "";
+    for (const x of t) s += x;
+    redimPreserve(t, 1, 2, 0, 3);
+    console.log(s, t[1, 0] + t[2, 1], uBound(t, 2), t[2, 3] == null);
+    const h = new Holder();
+    h.fill(2);
+    let k: any;
+    redim(k, 1, 2, 1, 2, 1, 2);
+    k[2, 2, 2] = 8;
+    console.log(h.grid[1, 2], k[2, 2, 2], uBound(k, 3));
+    // `erase`: still an array, without elements and bounds.
+    erase(a);
+    console.log(isArray(a), typeName(a));
+}
+
+function errors() {
+    let a: any;
+    let e: any;
+    let five: any = 5;
+    redim(a, 1, 3);
+    let s = "";
+    let r: any;
+    try { r = a[0]; } catch (x) { s += `low ${x.code}|`; }
+    try { r = a[1, 1]; } catch (x) { s += `dims ${x.code}|`; }
+    try { a[4] = 1; } catch (x) { s += `high ${x.code}|`; }
+    try { r = five[1]; } catch (x) { s += `scalar ${x.code}|`; }
+    try { r = uBound(a, 2); } catch (x) { s += `ubound2 ${x.code}|`; }
+    try { redimPreserve(e, 0, 1); } catch (x) { s += `preserveEmpty ${x.code}|`; }
+    try { erase(e); } catch (x) { s += `eraseEmpty ${x.code}|`; }
+    try { redim(a, 1, 0); } catch (x) { s += `empty ${x.code}|`; }
+    redim(a, 1, 2, 1, 2);
+    try { redimPreserve(a, 1, 3, 1, 2); } catch (x) { s += `first ${x.code}|`; }
+    try { redimPreserve(a, 1, 2); } catch (x) { s += `count ${x.code}|`; }
+    erase(a);
+    try { r = uBound(a); } catch (x) { s += `erased ${x.code}|`; }
+    try { for (const x of a) { r = x; } } catch (x) { s += `each ${x.code}`; }
+    console.log(s);
+    // `redim` replaces whatever the variable holds; the arrays of `array` / `split` are resized too.
+    redim(five, 1, 2);
+    let sp: any = split("a,b", ",");
+    redimPreserve(sp, 0, 2);
+    let ar: any = array(1, 2);
+    redimPreserve(ar, 0, 2);
+    console.log(typeName(five), sp[1], uBound(sp), ar[1], uBound(ar), ar[2] == null);
+    // Several subscripts on a 2-D RAS array held in an `any` (0-based, as in the VBA build).
+    const grid = new Array<int>(2, 3);
+    grid[0][1] = 2;
+    grid[1][2] = 6;
+    const g: any = grid;
+    g[1, 2] = 60;
+    console.log(g[0, 1], g[1, 2], grid[1][2], lBound(g, 2), uBound(g), uBound(g, 2));
+}
+
+export function run() {
+    basics();
+    errors();
+}
+"#;
+
+/// Arrays with their own bounds held in an `any` (spec §4.6). The expected output is what the
+/// VBA build prints in Excel.
+#[test]
+fn vba_arrays_in_any_run_as_in_the_vba_build() {
+    let files = [("Main", VBA_ARRAYS)];
+    let (_prog, out) = compile(&files);
+    if !has_node() {
+        return;
+    }
+    let p = Project::new("vbarrays", &files, &out);
+    let (stdout, stderr, ok) = p.run("Main.run", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec![
+            "Variant() 1 3 true a true",
+            "6 0 2 1",
+            "6 7 159 4 10",
+            "-1 2 1 true",
+            "abcd ad 3 true",
+            "xy 8 2",
+            "true Variant()",
+            "low 9|dims 9|high 9|scalar 13|ubound2 9|preserveEmpty 13|eraseEmpty 13|empty 9|first 9|count 9|erased 9|each 92",
+            "Variant() b 2 2 2 true",
+            "2 60 6 0 1 2",
+        ]
+    );
+}
+
+const PROPS_COUNTER: &str = r#"let n = 0;
+const labels = new Map<string, string>();
+
+export get total(): int {
+    return n;
+}
+export set total(v: int) {
+    n = v;
+}
+
+export get label(key: string): string {
+    return labels.has(key) ? labels.get(key) : "?";
+}
+export set label(key: string, v: string) {
+    labels.set(key, v);
+}
+"#;
+
+const PROPS_SHEET: &str = r#"let n = 0;
+let tags: string[] = ["", ""];
+
+export get count(): int {
+    return n;
+}
+export set count(v: int) {
+    n = v;
+}
+
+export get tag(i: int): string {
+    return tags[i];
+}
+export set tag(i: int, v: string) {
+    tags[i] = v;
+}
+
+export function bump(): int {
+    this.count += 10;
+    tag(0) = "b";
+    return count;
+}
+"#;
+
+const PROPS_MAIN: &str = r#"import { total } from "src/counter";
+
+class Bag {
+    private d = new Map<string, int>();
+    private last = "";
+    get item(key: string): int {
+        return this.d.get(key);
+    }
+    set item(key: string, value: int) {
+        this.last = key;
+        this.d.set(key, value);
+    }
+    get recent(): string {
+        return this.last;
+    }
+    static get twice(n: int): int {
+        return n * 2;
+    }
+}
+
+export function run() {
+    // A module's accessors: its properties, here and from other modules.
+    total = 3;
+    total += 4;
+    Counter.total++;
+    Counter.label("a") = "x";
+    Counter.label("a") += "y";
+    console.log(total, Counter.total, Counter.label("a"), Counter.label("b"));
+    // Accessors with parameters of a class.
+    const b = new Bag();
+    b.item("k") = 1;
+    b.item("k") += 2;
+    b.item("k")++;
+    console.log(b.item("k"), Bag.twice(4), b.recent);
+    // The same object, late-bound.
+    const o: object = b;
+    o.item("z") = 5;
+    const a: any = b;
+    a.item("z") += 1;
+    console.log(o.item("z"), a.recent);
+    // The accessors of a sheet's file.
+    Sheet1.count = 2;
+    Sheet1.count += 1;
+    Sheet1.tag(1) = "s";
+    console.log(Sheet1.count, Sheet1.tag(1), Sheet1.bump(), Sheet1.tag(0));
+    // Properties with arguments of host objects: a cell range takes the value.
+    const ws = Sheet1;
+    ws.cells(1, 2) = "x";
+    ws.range("A1") = 3;
+    ws.range("A1") += 4;
+    ws.range("A3").offset(1, 0) = "o";
+    ws.range(5, 1, 5, 2) = 7;
+    console.log(ws.range("B1").value, ws.range("A1").value, ws.range("A4").value, ws.range("B5").value);
+    const d = new Scripting.Dictionary();
+    d.item("a") = 1;
+    d("b") = 2;
+    d["c"] = 3;
+    d.item("a") += 10;
+    console.log(d.item("a"), d("b"), d["c"]);
+    // The accessors of a form: each instance has its own.
+    frmProps.count = 5;
+    const f = new frmProps();
+    f.count = 1;
+    f.mark(0) = "f";
+    console.log(f.pick(), f.mark(0), frmProps.count);
+}
+"#;
+
+/// Accessors (spec §3.6) in the debug run: those of a module are the functions `$get_name` /
+/// `$set_name`, a property with parameters of a class is a method and its setter `$set_name`,
+/// and `obj.name(args) = v` of a host or late-bound object goes through `$rt.putIndexed`.
+#[test]
+fn accessors_are_properties_in_the_debug_run() {
+    let spec = include_str!("js/forms/frmProps.form.json");
+    let code = include_str!("js/forms/frmProps.ras");
+    let mut cfg = Config::default();
+    cfg.sheet_code_names = vec!["Sheet1".into()];
+    cfg.forms = vec![FormDecl::from_form_json(spec).unwrap()];
+    let src = |key: &str, text: &str| SourceInput {
+        path: PathBuf::from(format!("src/{key}.ras")),
+        rel_path: format!("src/{key}.ras"),
+        key: key.into(),
+        kind: ModuleKind::User,
+        text: text.into(),
+    };
+    let sources = vec![
+        src("main", PROPS_MAIN),
+        src("counter", PROPS_COUNTER),
+        object_source(
+            PathBuf::from("objects/Sheet1.ras"),
+            "Sheet1",
+            PROPS_SHEET.to_string(),
+        ),
+        form_source(
+            PathBuf::from("forms/frmProps.ras"),
+            "frmProps",
+            code.to_string(),
+        ),
+    ];
+    let prog = analyze(sources, cfg);
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    let out = build_js(&prog, "../../");
+    assert!(!out.files.is_empty(), "no output: {:?}", out.diagnostics);
+    // The accessors are no entry points.
+    assert_eq!(
+        out.entries,
+        vec!["Main.run", "Sheet1.bump", "frmProps.show"]
+    );
+    let js = |name: &str| -> &str {
+        &out.files
+            .iter()
+            .find(|f| f.rel_path == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .text
+    };
+    let counter = js("counter.js");
+    for want in [
+        "exports.$get_total = $get_total;",
+        "function $set_total(v) {",
+        "function $set_label(key, v) {",
+    ] {
+        assert!(counter.contains(want), "{want}\n{counter}");
+    }
+    let main = js("main.js");
+    for want in [
+        "$m_counter.$set_total(3)",
+        "$m_counter.$set_label(\"a\", ($m_counter.$get_label(\"a\") + \"y\"))",
+        "    item(key) {",
+        "    $set_item(key, value) {",
+        "    get recent() {",
+        "    static twice(n) {",
+        "b.$set_item(\"k\", 1)",
+        "$rt.putIndexed(o, \"item\", [\"z\"], 5)",
+        "$rt.put($rt.call(ws, \"Cells\", [1, 2]), \"Value\", \"x\")",
+        "$rt.putIndexed(d, \"Item\", [\"a\"], 1)",
+        "$rt.setItem(d, [\"b\"], 2)",
+        "f.$set_mark(0, \"f\")",
+    ] {
+        assert!(main.contains(want), "{want}\n{main}");
+    }
+    let form = js("@forms/frmProps.js");
+    for want in [
+        "members: { \"$get_count\": $get_count, \"$set_count\": $set_count,",
+        "$rt.putIndexed($rt.get($me, \"lstItems\"), \"Selected\", [0], true)",
+        "$rt.putIndexed($rt.get($me, \"lstItems\"), \"List\", [2, 1], \"9\")",
+    ] {
+        assert!(form.contains(want), "{want}\n{form}");
+    }
+    if !has_node() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("ras-js-{}-props", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("src/main.ras", PROPS_MAIN);
+    write("src/counter.ras", PROPS_COUNTER);
+    write("objects/Sheet1.ras", PROPS_SHEET);
+    write("forms/frmProps.ras", code);
+    write("forms/frmProps.form.json", spec);
+    for f in &out.files {
+        write(&format!("build/debug/{}", f.rel_path), &f.text);
+    }
+    let p = Project(root);
+    let (stdout, stderr, ok) = p.run("Main.run", Some(&fixture("mock_props.js")));
+    assert!(ok, "{stdout}\n{stderr}");
+    let expected = "\
+8 8 xy ?
+4 8 k
+6 z
+3 s 13 b
+x 7 o 7
+11 2 3
+3 mc9 f 5
 ";
     assert_eq!(stdout, expected, "{stderr}");
 }

@@ -593,6 +593,25 @@ module.exports = function install(rt) {
             if (this.$kind === "ComboBox") this.$s.Text = "";
             this.$touch();
         }
+        /** `List(index, column) = v` (`$rt.putIndexed`). */
+        $set_List(...args) {
+            this.$needList();
+            const v = args.pop();
+            if (args[0] === undefined) return void (this.List = v);
+            const i = rt.toInt(args[0]);
+            if (!(i >= 0 && i < this.$list.length)) raise(381, "List");
+            const c = args[1] === undefined ? 0 : rt.toInt(args[1]);
+            const row = this.$list[i];
+            while (row.length < c) row.push("");
+            row[c] = v === null ? "" : v;
+            this.$touch();
+        }
+        /** `Column(column, index) = v`. */
+        $set_Column(...args) {
+            const v = args.pop();
+            if (args[1] === undefined) raise(438, "Column");
+            this.$set_List(args[1], args[0], v);
+        }
         get Column() {
             this.$needList();
             const self = this;
@@ -610,6 +629,17 @@ module.exports = function install(rt) {
                 if (!(i >= 0 && i < self.$list.length)) raise(381, "Selected");
                 return self.$s.MultiSelect ? !!self.$selected[i] : self.$index === i;
             };
+        }
+        /** `Selected(index) = v`. */
+        $set_Selected(index, v) {
+            this.$needList();
+            const i = rt.toInt(index);
+            if (!(i >= 0 && i < this.$list.length)) raise(381, "Selected");
+            if (this.$s.MultiSelect) {
+                this.$selected[i] = rt.cbool(v);
+                this.$touch();
+            } else if (rt.cbool(v)) this.$selectIndex(i);
+            else if (this.$index === i) this.$selectIndex(-1);
         }
         AddItem(item, index) {
             this.$needList();
@@ -849,6 +879,12 @@ module.exports = function install(rt) {
             for (const ctl of this.$all) ctl.$readControlSource();
             for (const [member, fn] of Object.entries(def.members || {})) {
                 if (!(member in this)) this[member] = (...args) => enter(this, () => fn(...args));
+            }
+            // `export let` of the code-behind: the variable of this instance.
+            for (const [member, v] of Object.entries(def.vars || {})) {
+                if (!(member in this)) {
+                    Object.defineProperty(this, member, { get: () => enter(this, v.get), set: (x) => enter(this, () => v.set(x)), configurable: true });
+                }
             }
             loaded.add(this);
         }

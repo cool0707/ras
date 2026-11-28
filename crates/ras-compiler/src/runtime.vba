@@ -154,10 +154,53 @@ End Function
 Public Sub RAS_Assign(ByRef target As Variant, ByRef source As Variant)
     If IsObject(source) Then
         Set target = source
+    ElseIf IsArray(source) Then
+        RAS_AssignArray target, source
     Else
         target = source
     End If
 End Sub
+'@@ proc RAS_AssignArray
+' Copies an array. An empty array made from a descriptor alone (SafeArrayAllocDescriptor, the
+' usual way to get an empty typed array) cannot be copied (error 5): an empty array stands for it.
+Public Sub RAS_AssignArray(ByRef target As Variant, ByRef source As Variant)
+    On Error GoTo RAS_NoCopy
+    target = source
+    Exit Sub
+RAS_NoCopy:
+    If Err.Number <> 5 Then Err.Raise Err.Number, Err.Source, Err.Description
+    target = Array()
+End Sub
+'@@ proc RAS_IsAllocated
+' Whether an array has bounds (False for `Dim a()` before `ReDim` and after `Erase`).
+Public Function RAS_IsAllocated(ByRef arr As Variant) As Boolean
+    Dim n As Long
+    On Error Resume Next
+    n = UBound(arr)
+    RAS_IsAllocated = (Err.Number = 0&)
+End Function
+'@@ proc RAS_DynamicArray
+' What `Dim a()` declares: an array without elements yet.
+Public Function RAS_DynamicArray() As Variant
+    Dim a() As Variant
+    RAS_DynamicArray = a
+End Function
+'@@ proc RAS_Opt
+' An optional argument passed on to a member of Excel / VBA: omitted (Empty) stays omitted.
+Public Function RAS_Opt(ByRef v As Variant, Optional ByVal ras_omitted As Variant) As Variant
+    If IsEmpty(v) Then
+        RAS_Opt = ras_omitted
+    ElseIf IsObject(v) Then
+        Set RAS_Opt = v
+    Else
+        RAS_Opt = v
+    End If
+End Function
+'@@ proc RAS_LetValue
+' What `v = source` stores: the default member of an object (`v = Range("A1")`), the value otherwise.
+Public Function RAS_LetValue(ByRef source As Variant) As Variant
+    RAS_LetValue = source
+End Function
 '@@ proc RAS_FMod
 ' Remainder for real numbers; the sign follows the dividend (VBA's Mod rounds its operands first).
 Public Function RAS_FMod(ByVal a As Double, ByVal b As Double) As Double

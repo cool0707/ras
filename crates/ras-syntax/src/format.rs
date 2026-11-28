@@ -129,6 +129,14 @@ mod tests {
     }
 
     #[test]
+    fn accessors_keep_their_shape() {
+        let src = "let n: int;\nexport get total(): int {\nreturn n;\n}\nexport set total(v: int) {\n  n = v;\n}\nget item(key: string): any {\n        return n;\n}\nset item(key: string, value: any) {\n}\nfunction f(o: object) {\ntotal += 1;\nitem(\"k\") = 2;\no.prop(1) = item(\"k\");\n}\n";
+        let want = "let n: int;\nexport get total(): int {\n    return n;\n}\nexport set total(v: int) {\n    n = v;\n}\nget item(key: string): any {\n    return n;\n}\nset item(key: string, value: any) {\n}\nfunction f(o: object) {\n    total += 1;\n    item(\"k\") = 2;\n    o.prop(1) = item(\"k\");\n}\n";
+        assert_eq!(format(src).as_deref(), Some(want));
+        assert_eq!(format(want).as_deref(), Some(want));
+    }
+
+    #[test]
     fn idempotent_and_refuses_broken_code() {
         let src = "const a = [\n1,\n2,\n];\nlet s = `multi\n  line`;\n";
         let once = format(src).unwrap();

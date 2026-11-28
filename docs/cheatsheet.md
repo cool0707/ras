@@ -10,11 +10,12 @@ RAS は TypeScript に似た構文で書き、VBA（`.bas` / `.cls`）に変換�
 - `struct`・タプル・配列は値型です（代入でコピーされます）。`class` のインスタンスと Excel のオブジェクトは参照です。
 - アロー関数の中から、外側の変数を書き換えられません（`forEach` の中で合計を足すなど）。`for...of` か `reduce` を使います。
 - 負の添字は末尾から数えません（`xs[-1]` は範囲外のエラー）。末尾からは C# と同じく `xs[^1]`、一部の取り出しは範囲 `xs[1..^1]`・`s[..3]`（終わりは含まない）、数の列挙は `for (const i of 0..n)` です。範囲・`slice`・`step(n)`・`toReversed()`・2 次元配列の `transpose()`（行と列の入れ替え）は新しい配列を返し、`reverse()`・`sort()` は配列そのものを並べ替えます。
-- `undefined`・`?.`・スプレッド（`...`）・`async` / `await`・クラスの継承（`extends` / `super`）・関数の中の `function` はありません。
+- `undefined`・`?.`・スプレッド（`...`）・`async` / `await`・クラスの継承（`extends` / `super`）・関数の中の `function` はありません（`...` は、可変長引数の宣言 `...rest: any[]` にだけ書けます）。
 - Excel / VBA のメンバーとグローバルは camelCase で書きます（`ws.cells(1, 1).value`、`msgBox(...)`、`xlUp`）。VBA の綴り（`Cells`）は警告になり、`ras check --fix` で直せます。
 - 名前は大文字小文字だけの違いでは区別できません（VBA が区別しないため。`Shape` という型と `shape` という変数は同時に使えません）。
 - セルの値（`range.value`）は `cellValue` です（エラー値 `#N/A` などのことがある `any`）。`isError()` で確かめる（`if (isError(v)) continue;`）か `Excel.errorToNull(v)` を通すと `any` になります。そのまま比較・計算・型変換すると警告 W0313（エラー値のとき実行時エラーになるため）。型の付いた変数に入れると実行時に変換されます（空のセル → `0` / `""`）。
 - VBA の `[A1]`・`[SUM(A1:A10)]`（`Evaluate`）は `` fx`SUM(A1:A10)` `` と書きます（`[...]` は配列です）。
+- VBA の `s Like "A*"` は `like(s, "A*")`、`Null` は `dbNull` と書きます（`isNull(v)` で確かめる）。RAS の `null` は `Null` ではなく、`any` では `Empty`、オブジェクトでは `Nothing` です。
 - シートはコード名（`Sheet1`）で参照します。`range("A1")` のようにシートを付けない書き方は、選択中のシートに依存するので警告になります。
 
 ## 型
@@ -84,6 +85,11 @@ function increment(byref n: int, by: int = 1) {
     n += by;
 }
 
+// 可変長引数（VBA の ParamArray）: 最後の引数を ...名前: any[] にする。渡されなければ空の配列
+export function joinPath(first: string, ...rest: any[]): string {
+    return rest.length == 0 ? first : first + "\\" + rest.join("\\");   // joinPath("C:", "work", 2026)
+}
+
 // 拡張メソッド: 第 1 引数を this にすると ws.lastRow() と呼べる
 export function lastRow(this: Excel.Worksheet, col: int = 1): int {
     return this.cells(this.rows.count, col).end(xlUp).row;
@@ -98,6 +104,40 @@ export function lambdas(): int {
     return sum + count + area(2.0) as int;
 }
 ```
+
+## プロパティ（`get` / `set`）
+
+```typescript
+let cache = 0;
+let names: string[] = ["", "", ""];
+
+// モジュールのプロパティ（VBA の Property Get / Let。値がオブジェクト型なら Property Set）
+export get total(): int {
+    return cache;
+}
+export set total(v: int) {            // setter を書かなければ読み取り専用
+    cache = v;
+}
+
+// 引数のあるプロパティ: setter の最後の引数が、代入された値
+export get label(i: int): string {
+    return names[i];
+}
+export set label(i: int, value: string) {
+    names[i] = value;
+}
+
+export function useProps(ws: Excel.Worksheet, o: object) {
+    total = 3;                        // 変数のように読み書きする（ほかのファイルからは Module.total）
+    total += 1;
+    label(0) = "x";                   // 引数のあるプロパティには、呼び出しの形に代入する
+    label(0) += "y";
+    ws.cells(1, 2) = total;           // Excel の引数のあるプロパティにも代入できる（セルの value への代入）
+    o.prop(1) = label(0);             // object / any のメンバー（実行時に探す）
+}
+```
+
+クラスの中にも同じ形で書けます（`get item(key: string): int { ... }` / `set item(key: string, value: int) { ... }`、`bag.item("k") = 1`）。シートのファイル（`objects/Sheet1.ras`）・フォームのコードビハインドに `export get` / `export set` を書くと、そのシート・フォームのプロパティになります（`Sheet1.count = 3`、`frmInput.count`）。
 
 ## 構造体・タプル・クラス・列挙型
 
@@ -192,7 +232,7 @@ export function fill() {
 
 export function readAll(): double {
     const ws = Sheet1;
-    const data = ws.range("A1").currentRegion.value;   // 2 次元配列（cellValue。添字は 0 始まり）
+    const data = ws.range("A1").currentRegion.toArray();   // 2 次元配列（cellValue[][]。添字は 0 始まり）
     let total = 0.0;
     for (let r = 1; r < data.length; r++) {
         const v = data[r][1];
@@ -257,6 +297,8 @@ function opened() {
 
 ```typescript
 // forms/frmInput.ras（コードビハインド。this がフォーム）
+export let cancelled = false;         // 公開の変数: ほかのモジュールから frmInput.cancelled / f.cancelled
+
 function constructor(name: string, limit: int = 20) {   // new frmInput(...) の引数
     this.txtName.text = name;
 }
@@ -268,6 +310,7 @@ function ok() {
 
 @on("btnCancel.Click")
 function cancel() {
+    cancelled = true;
     this.close();                     // 値なし（× ボタンも）: 型の既定値（""）
 }
 ```
@@ -391,6 +434,48 @@ export function copyLines(src: string, dest: string) {
 ```
 
 ほかに `input(n, a, b)`（`Input #`）、`inputString(n, 文字数)`、`fileGet` / `filePut`（`Get` / `Put`）、`seek`、`lock` / `unlock`、`fileWidth`、`rename(古い, 新しい)`（`Name … As …`）、`reset()`。`fileOpen` のモード（`forInput` など）・`accessRead`・`lockShared` は定数で書きます。
+
+## VBA の配列（`any` に入れた配列・`ReDim`）
+
+手書きの VBA と同じ添字（1 始まり・多次元）で配列を扱うときは、`any` の変数に入れます（仕様 §4.6）。新しく書くコードでは `T[]` と `range.toArray()` を使います。
+
+```typescript
+export function table(rows: int): any {
+    let t: any;
+    redim(t, 1, rows, 1, 3);                      // ReDim t(1 To rows, 1 To 3)。要素は null（Empty）
+    for (let r = lBound(t); r <= uBound(t); r++) {
+        t[r, 1] = r;                              // t(r, 1) = r（添字は書いたとおり。カンマ区切りは any だけ）
+        t[r, 3] = t[r, 1] * 2;
+    }
+    redimPreserve(t, 1, rows, 1, uBound(t, 2) + 1);   // ReDim Preserve（変えられるのは最後の次元だけ）
+    const v: any = Excel.errorToNull(Sheet1.range("A1:C3").value);   // 複数セルの value は 1 始まりの 2 次元配列
+    t[1, 2] = v[1, 1];
+    let total = 0;
+    for (const x of v) {                          // For Each（すべての要素）
+        total += x ?? 0;
+    }
+    let copy = t;                                 // 配列は値（代入・any の引数・戻り値でコピーされる）
+    erase(copy);                                  // Erase（isArray(copy) は true のまま）
+    return t;
+}
+```
+
+## VBA のまま書く（`vba` ブロック）
+
+RAS に書けない VBA（`Declare` の `As Any`、条件付きコンパイルなど）は、`vba` ブロックに書くとそのままモジュールに出力されます。RAS から呼ぶ関数は `declare function` で宣言します。既存のブックの取り込みも、変換できないプロシージャをこの形で残します。
+
+```typescript
+vba`
+Public Function LegacyTotal(ByVal n As Long) As Long
+    LegacyTotal = n * 2
+End Function
+`;
+declare function LegacyTotal(n: int): int;
+
+export function useLegacy(): int {
+    return LegacyTotal(21);
+}
+```
 
 ## テスト（`test/*.test.ras`）
 

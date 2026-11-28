@@ -1,0 +1,40 @@
+// Accessors of a form (spec §3.5): properties of the form, each instance with its own state.
+let n = 0;
+let marks: string[] = ["", "", ""];
+
+export get count(): int {
+    return n;
+}
+export set count(v: int) {
+    n = v;
+}
+
+export get mark(i: int): string {
+    return marks[i];
+}
+export set mark(i: int, v: string) {
+    marks[i] = v;
+}
+
+get picked(): string {
+    let s = "";
+    for (let i = 0; i < this.lstItems.listCount; i++) {
+        if (this.lstItems.selected(i)) {
+            s += this.lstItems.list(i, 0) + this.lstItems.list(i, 1);
+        }
+    }
+    return s;
+}
+
+export function pick(): string {
+    // Properties with arguments of the controls (spec §3.5.3).
+    this.lstItems.selected(0) = true;
+    this.lstItems.selected(2) = true;
+    this.lstItems.selected(0) = !this.lstItems.selected(0);
+    this.lstItems.list(2, 1) = "9";
+    count += 1;
+    this.count++;
+    mark(1) = "m";
+    this.mark(1) += picked;
+    return `${count} ${this.mark(1)}`;
+}

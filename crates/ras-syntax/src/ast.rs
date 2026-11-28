@@ -31,6 +31,9 @@ pub struct Decorator {
 pub enum Item {
     Import(Import),
     Fn(FnDecl),
+    /// `get name(): T { ... }` / `set name(v: T) { ... }` at the top level: a property of the
+    /// module (`vis` is `Public` when exported, `is_static` is unused).
+    Accessor(AccessorDecl),
     Class(ClassDecl),
     Interface(InterfaceDecl),
     Enum(EnumDecl),
@@ -41,6 +44,16 @@ pub enum Item {
     Namespace(NamespaceDecl),
     /// Top-level executable statement (script style; collected into `Sub Main`).
     Stmt(Stmt),
+    /// `` vba`…` `` at the top level: VBA written into the module as it is (spec §14.7.4).
+    RawVba(RawVba),
+}
+
+/// A block of VBA that goes into the generated module verbatim.
+#[derive(Debug, Clone)]
+pub struct RawVba {
+    /// The text between the back-ticks, as written (no escapes, no `${…}`).
+    pub text: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -212,6 +225,8 @@ pub struct FieldDecl {
 pub struct MethodDecl {
     pub vis: Visibility,
     pub is_static: bool,
+    /// `event Changed(index: int);`: an event the objects of the class raise (spec §12.2.2).
+    pub is_event: bool,
     pub func: FnDecl,
 }
 
@@ -527,6 +542,9 @@ pub enum ExprKind {
         object: Box<Expr>,
         index: Box<Expr>,
     },
+    /// `i, j` — the several subscripts of `v[i, j]`; only as the `index` of an `Index`
+    /// whose object is late-bound (`any`: a VBA array of several dimensions, spec §4.6).
+    Subscripts(Vec<Expr>),
     /// `^n` — the n-th position from the end; only directly inside an index or a range.
     FromEnd(Box<Expr>),
     /// `a..b`, `..b`, `a..`, `..` — only as an index (`xs[1..^1]`) or the source of `for...of`.

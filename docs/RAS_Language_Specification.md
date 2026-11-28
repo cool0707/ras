@@ -26,10 +26,13 @@
 > * フォームのコントロールにプログレスバー `ProgressBar`（キャプション・割合・バー。ラベルを組み合わせて書き込み、同梱のクラスで `value` などを操作する。バーの色の既定は Windows のアクセント カラー）を追加（§14.11.13）
 > * フォームのコントロールにファイル・フォルダーの選択欄 `FilePicker`（テキスト ボックスとボタン。ボタンで `Application.FileDialog` を表示し、`browse()` は選んだパスの配列（キャンセルは空の配列）を返す。パスは貼り付けもできる）を追加（§14.11.14）。Excel のない実行の `Application.FileDialog` を、`getOpenFilename` と同じく応答できるようにした
 > * フォームのデザインを作らずにコードで組み立てるダイアログ（任意のボタンの `choose`、入力欄を並べる `Dialog`、モードレスのプログレスバー `Progress`）を追加（§14.11.15）。同梱の空のフォーム `RAS_Dialog` に実行時にコントロールを並べる。デバッグ実行の `DoEvents` で、表示中のフォームの操作を受け取るようにした
+> * `any` に入れた VBA の配列を、VBA と同じ添字で扱えるようにした（§4.6）。複数の添字 `v[i, j]`、`redim(a, 1, n, 1, 3)` / `redimPreserve` / `erase`（`ReDim` / `ReDim Preserve` / `Erase`）
 * デバッグ実行を一時停止する `debugger;` 文を追加（§14.10.9）。VBA ビルドでは何も出力しない。プレイグラウンドでは、ブラウザの開発者ツールで `.ras` のファイルにブレークポイントを置いてデバッグできる（§14.10.10）
 > * シートの追加・複製・削除・名前の変更を、ブックと `objects/` のファイルに一緒に行う `ras sheet` と VS Code のコマンドを追加（§14.16）。Excel で複製したシートは、同期がコピー元のファイルを複製する（§14.7.2）
 > * フォームのコントロールにアンカー `anchor` を追加（§14.11.16）。フォームの大きさが変わると、生成する `UserForm_Resize` のコードが指定した辺に合わせてコントロールを動かし・伸ばす。デザイナーでは Visual Studio と同じ十字の図で選び、フォームのサイズ変更にも追従する。デザイナーのツールバーに、グリッドに合わせる・サイズをグリッドに合わせる・間隔（均等・広げる・狭める・詰める）・中央に配置を追加
 > * フォームに `resizable`（ユーザーが枠をドラッグしてサイズを変えられる）と、内側のサイズの最小・最大 `minimumWidth`・`minimumHeight`・`maximumWidth`・`maximumHeight` を追加（§14.11.17）。生成するコードが Windows API で枠を付け、`UserForm_Resize` でサイズを範囲に戻す。デバッグ実行のフォームも枠をドラッグしてサイズを変えられ、デザイナーのフォームのサイズ変更も範囲に収まる
+> * ブックの手書きの VBA の取り込み（§14.7.1）を、実際のブックで通るようにした。クラスモジュールを `class` として取り込む。変換の後で型チェックの結果を使って書き換え（数値の条件、`Range` の既定メンバー、ビット演算の `And` / `Or` / `Not`、暗黙の型変換）、RAS に書けないもの・変換してもコンパイルできないプロシージャは VBA のまま `vba` ブロックとして取り込む（§14.7.4）。そのための `` vba`…` `` ブロック、`letValue`、`dynamicArray` を追加した。テンプレート文字列の `${…}` の中にテンプレート文字列を書けるようにした。
+> * モジュール・シート・フォームのファイルのトップレベルに `get` / `set` を書いて、そのモジュールのプロパティ（VBA の `Property Get` / `Let` / `Set`）を宣言できるようにした。クラスのものも含めて、アクセサーが引数を取れるようにした（`get item(key: string): T` / `set item(key: string, value: T)`。`obj.item("k") = v` と代入する）。`object` / `any` のメンバーと、型定義で `@property` と記した Excel / VBA のメンバー（`listBox.selected(i)`、`ws.cells(r, c)` など）にも、呼び出しの形で代入できる（§3.6）
 > * `TextBox` にプレースホルダー `placeholder` を追加（§14.11.18）。ボックスに重ねたラベルとして書き込み、空でフォーカスが無いあいだ灰色で表示する。ラベルの上でマウスのボタンを離すと非表示になってボックスにフォーカスが移り、編集を終えて空なら再び表示する
 
 > v0.7 からの変更
@@ -500,9 +503,11 @@ ws.range("B1").value = fx`TODAY()`;
 VBAのデフォルトが `ByRef` であることに起因する事故を防ぐため、RASでは**デフォルトを `ByVal`** とし、参照渡しを明示する。
 
 * **構文:** 引数名の前に `byref`（または `byval`）修飾子を記述可能。省略時は `ByVal`。
+* **`byref` に渡すもの:** 変数（フィールド・配列の要素を含む）を渡す。リテラルや式は渡せない（`E0406`）。例外として、型が `any` の `byref` 引数（VBA の `ByRef … As Variant`）には式も渡せる（VBA と同じく一時的な値が渡り、書き換えは捨てられる）。VBA のコードが大きな配列をコピーせずに関数へ渡すときの形であり、取り込み（§14.7.1）は `ByVal` の付いていない `Variant`・配列の引数を `byref` のままにする。
 * **可視性:** `export function` → `Public`、`export` なし → `Private`。
 * **戻り値:** `return expr;` は `関数名 = expr` ＋ `Exit Function` に変換する（末尾の `return` では `Exit` を省略）。オブジェクト型の戻り値は `Set 関数名 = expr`。
 * **`void` 関数:** `Sub` として出力する。
+* **可変長引数:** 最後の引数を `...rest: any[]` と書くと、余分な引数を配列で受け取る（VBA の `ParamArray`。§3.5）。
 
 ### 3.1 コード変換例
 
@@ -599,7 +604,8 @@ const last = Sheet1.lastRow();
 
 * **構文:** 引数リストの中に `name: expr` と書く。名前のない引数（位置引数）と混ぜられるが、名前付き引数の後ろに位置引数は書けない（`f(1, c: "z")` は可、`f(a: 1, 2)` は不可）。名前付き引数どうしの順序は自由。
 * **使える呼び出し:** 宣言のある関数・メソッド・コンストラクタ（`new`）・拡張メソッド・Excel / VBA のメンバーとグローバル関数（`.d.ras` の引数名）・既定メンバー。引数名は宣言どおりに書く（大文字小文字を区別する。Excel / VBA の引数名も camelCase: `lookAt`、`matchCase`）。
-* **使えない呼び出し:** 関数型の値（ラムダ）・`any` / `object` 型の値のメンバー（遅延バインディング）・配列や文字列などの組み込みメソッド・`new Error` / `new Map` / `new Array`。
+* **遅延バインディング:** `any` / `object` 型の値のメンバーの呼び出し（`sheet.select(replace: false)`）にも書ける。宣言がないため並べ替えはせず、VBA の名前付き引数（`sheet.select replace:=False`）として出力し、引数は実行時に VBA が名前で探す（名前が違えば実行時エラー 448）。名前付き引数の後ろに位置引数は書かない。`ras run` / `ras test` の代役では、書いた順の位置引数として渡る。
+* **使えない呼び出し:** 関数型の値（ラムダ）・配列や文字列などの組み込みメソッド・`new Error` / `new Map` / `new Array`。
 * **拡張メソッド:** `this` 引数はレシーバで渡すため、名前では指定できない。
 * **変換:** コンパイル時に宣言の順序に並べ替え、指定されなかった引数は `undefined`（§3.4 の引数の省略と同じ）として扱う。RAS の関数では既定値を埋め込み、Excel / VBA のメンバーでは引数を空欄にする（VBA の `,,`）。
 * **評価順:** 引数の式は、書いた順ではなく宣言の順に評価される。副作用のある式を複数渡すときは注意する。
@@ -626,6 +632,169 @@ MsgBox "完了しました",, "集計"
 ### 3.4 引数の省略（`undefined`）
 
 位置で渡す引数リストの途中に `undefined` を書くと、その省略可能な引数を指定しなかったことになる（`label(1, undefined, "z")`）。扱いは名前付き引数で飛ばした引数と同じ。
+
+**省略された引数をそのまま渡す:** 型が `any` の省略可能な引数（`tip?: any`。既定値なし）を、Excel / VBA のメンバーや遅延バインディングの呼び出しの引数にそのまま書くと、省略されていたとき（値が `Empty`）は、渡した先でも省略したことになる（`sheet.hyperlinks.add(cell, "", screenTip: tip)`）。`Empty` を値として受け取れないメンバーに、省略可能な引数を中継できる。出力は `RAS_Opt(tip)`。RAS の関数に渡すときは、ふつうの値（`Empty`）として渡る。
+
+### 3.5 可変長引数（`...rest: any[]`）（v0.9で追加）
+
+最後の引数を `...名前: any[]` と宣言すると、その位置から後ろに渡された引数を、いくつでも配列として受け取れる（VBA の `ParamArray`）。
+
+* **宣言:** 関数（拡張メソッドを含む）・クラスのメソッド・コンストラクタ（フォームの `constructor` を含む）の**最後の引数**にだけ書ける。型は `any[]`。`byref`・`?`・既定値は付けられない。アロー関数・インターフェイスのメンバー・プロパティ（`get` / `set`）・`declare` の関数には書けない（どれも `E0152`）。
+* **関数の中:** 通常の 0 始まりの `any[]` として使う（`rest.length`、`for...of`、添字、`push`、ほかの関数に渡す）。余分な引数が 1 つも渡されなければ空の配列（`length == 0`）。呼び出し元の変数の写しなので、要素を書き換えても呼び出し元には影響しない。
+* **呼び出し:** 余分な引数はいくつでも渡せ、それぞれ `any` として渡る（`null` は `Empty`）。配列を渡すと、配列 1 つが 1 つの要素になる（展開はしない。呼び出し側のスプレッド `f(...xs)` は無い）。名前付き引数（§3.3）では指定できない（`E0412`）。必須の引数が足りなければ `E0402`（「1 個以上必要」）。
+* **出力:** 最後の引数を `ParamArray 名前() As Variant` にする。VBA は `ParamArray` をほかのプロシージャへ参照渡しできず（「ParamArray の使い方が不正です」）、RAS の配列操作はランタイムに配列を参照渡しするため、プロシージャの先頭で通常の変数（`ras_名前`。`any[]` は `Variant`）に写し、本体はそれを使う。VBA では `ParamArray` と `Optional` を併用できないので、可変長引数のある関数の引数は `Optional` にしない（RAS からの呼び出しは既定値を埋めて渡す。§3.3）。コンストラクタでは、ファクトリ関数（`New_Foo`）が `ParamArray` で受け取り、写した配列を `RAS_Init` に渡す。
+* **インライン展開:** 可変長引数のある関数は展開しない（§8）。
+* **デバッグ実行（§14.10）:** JavaScript の残余引数（`...rest`）にする。
+
+**RASコード:**
+```typescript
+export function joinPath(first: string, ...rest: any[]): string {
+    if (rest.length == 0) return first;
+    return first + "\\" + rest.join("\\");
+}
+
+export function demo(): string {
+    return joinPath("C:", "work", 2026);
+}
+```
+
+**出力VBAコード:**
+```vba
+Public Function joinPath(ByVal first As String, ParamArray rest() As Variant) As String
+    Dim ras_rest As Variant
+
+    ras_rest = rest
+    If RAS_Len(ras_rest) = 0& Then
+        joinPath = first
+        Exit Function
+    End If
+    joinPath = first & "\" & RAS_Join(ras_rest, "\")
+End Function
+
+Public Function demo() As String
+    demo = joinPath("C:", "work", 2026&)
+End Function
+```
+
+### 3.6 アクセサー（プロパティ: `get` / `set`）（v0.9で追加）
+
+`get 名前(): T { ... }`（getter）と `set 名前(value: T) { ... }`（setter）で、プロパティを宣言する。VBA の `Property Get` / `Property Let` / `Property Set` プロシージャになる。手書きの VBA にある `Property` プロシージャを、公開している名前と形を変えずに RAS で書くためのものである。書ける場所は 2 つ。
+
+* **クラスの中:** そのクラスのインスタンス（`static` を付ければクラス）のプロパティ。`private` / `protected` も付けられる。
+* **ファイルのトップレベル:** そのモジュールのプロパティ（§3.6.1）。`export` を付けると `Public`、付けなければ `Private`。
+
+規則は共通である。
+
+* **getter:** 値を返す。戻り値の型注釈を省くと、関数と同じく本体から推論する。
+* **setter:** 代入された値を**最後の引数**で受け取る（省略可能にはできない）。戻り値の型は書けない。値の型がオブジェクト型（クラス・`object`・Excel のオブジェクトなど）なら `Property Set` を、それ以外なら `Property Let` を出力し、代入する側も `Set` を付ける・付けないを合わせる。値の型が `any`（`cellValue`・値とオブジェクトのユニオン型）のときは、代入する値によって `Let` と `Set` のどちらにもなる（§2.3）ので、同じ本体の `Property Let` と `Property Set` の両方を出力する。
+* **読み取り専用・書き込み専用:** getter だけのプロパティには代入できない（`E0323`）。setter だけのプロパティは読み取れない（`E0326`。`+=`・`++` も読み取るので使えない）。
+* **getter と setter の一致:** getter の型と setter の値の型は同じにする。引数のあるプロパティ（§3.6.2）では、setter の引数は、getter の引数の後ろに値の引数を 1 つ足したものにする（数・型・省略できるかどうかを揃える。引数の名前は違ってよい）。VBA は食い違う `Property Get` / `Let` をコンパイルできないので、RAS がエラーにする（`E0155`）。
+* **書けないもの:** 型パラメーター、`byref` の引数、拡張メソッドの `this` 引数、`@macro`・`@on`・`@init`・`@udf`・`@ribbon`（`E0155`）。アクセサーはインライン展開しない（§8）。型定義（`.d.ras`）には書けない（プロパティは `name: T`、引数のあるプロパティは `name(index: K): T` と書く。§15.3）。
+* **ドキュメントコメント:** getter と setter の両方に書けるが、VBA のプロパティの説明（`VB_Description`）は 1 つなので、getter のもの（getter が無ければ setter のもの）を出力する。
+
+#### 3.6.1 モジュールのプロパティ
+
+ファイルのトップレベルに書いたアクセサーは、そのファイルのモジュールのプロパティになる。同じ名前の getter と setter を 1 つずつ書ける（同じ名前の関数・変数とは同時に宣言できない。`E0101`）。
+
+* **`src/` のファイル（標準モジュール）:** ファイルの中では変数と同じように読み書きする（`total`、`total = 3`、`total += 1`）。ほかのファイルからは、`export` したものを `import { total } from "src/settings"` で取り込むか、モジュール名を付けて参照する（`Settings.total`。§12.1.2）。getter だけを `export` すれば、ほかのファイルからは読み取り専用になる。
+* **シート・`ThisWorkbook` のファイル（`objects/<コード名>.ras`。§12.2）とフォームのコードビハインド（`forms/<名前>.ras`。§14.11.2）:** そのシート・ブック・フォームのプロパティになる。規則は、これらのファイルの関数と同じである: ファイルの中では名前だけで（`count`）、`export` したものは `this.count` でも参照できる。ほかのファイルからは、`export` したものをシートのコード名・フォームの名前・フォームのインスタンスを通して参照する（`Sheet1.count`、`Sheet1.count = 3`、`frmInput.count`、`new frmInput().count`）。フォームのインスタンスは、それぞれが自分の値を持つ。
+* **名前:** 関数と同じく、VBA の関数と同じ名前のプロパティは、生成する VBA では末尾に `_` を付ける（§13.6）。シート・ブックのメンバー、シートの上のコントロールと同じ名前は付けられない（`E0651`）。
+* **マクロ・テストの生成:** アクセサーは、引数が無くてもマクロの一覧（§12.4）にもデバッグ実行の入口（§14.10）にも入らない。「テストを生成」（§14.12.10）の対象にもならない。
+
+#### 3.6.2 引数のあるプロパティ
+
+getter・setter は引数を取れる（クラスのものもモジュールのものも）。VBA の引数付きの `Property` プロシージャ（`Property Get Item(ByVal key As String) As Variant`）に当たる。
+
+* **読み取り:** 関数と同じく呼び出す（`obj.item("k")`、`item("k")`、`Sheet1.item("k")`）。引数を書かずに `obj.item` とは書けない（`E0382`）。
+* **代入:** 呼び出しの形に代入する（`obj.item("k") = v`）。`+=` などの複合代入と `++` / `--` も使える（getter で読み、setter で書く。レシーバと引数の式は 1 回だけ評価する）。引数は setter の引数（値を除く）と、値は setter の最後の引数の型と照合する。
+* **省略可能な引数:** 関数と同じく `key?: string`・既定値を書ける。VBA では `Optional` になり、`Property Let` では値の引数の前に置かれる。RAS からの呼び出しでは、省略した引数に既定値を埋め込む（§3.3 と同じ）。名前付き引数も使える。
+* **呼び出しの形への代入ができるもの:** ここで宣言したプロパティと、§3.6.3 のもの。関数・メソッドの戻り値には代入できない（`E0325`）。`Scripting.Dictionary` / `Map` の `d[key] = value` は従来どおり使える。
+
+**RASコード:**
+```typescript
+// src/settings.ras
+let cache: int;
+let names: string[] = ["", "", ""];
+
+/** 合計。 */
+export get total(): int {
+    return cache;
+}
+export set total(v: int) {
+    cache = v;
+}
+
+// 引数のあるプロパティ: setter の最後の引数が、代入された値
+export get label(i: int): string {
+    return names[i];
+}
+export set label(i: int, value: string) {
+    names[i] = value;
+}
+
+export function demo(ws: Excel.Worksheet, o: object) {
+    total = 3;
+    total += 1;
+    label(0) = "x";
+    label(0) += "y";
+    ws.cells(1, 2) = total;      // §3.6.3: セル範囲の value への代入
+    o.prop(1) = label(0);        // §3.6.3: 遅延バインディング
+}
+
+// src/main.ras
+export function run() {
+    Settings.total = Settings.total + 1;
+    Settings.label(2) = "z";
+}
+```
+
+**出力VBAコード:**
+```vba
+' Settings.bas
+' 合計。
+Public Property Get total() As Long
+Attribute total.VB_Description = "合計。"
+    total = cache
+End Property
+
+Public Property Let total(ByVal v As Long)
+    cache = v
+End Property
+
+Public Property Get label(ByVal i As Long) As String
+    label = names(i)
+End Property
+
+Public Property Let label(ByVal i As Long, ByVal value_ As String)
+    names(i) = value_
+End Property
+
+Public Sub demo(ByVal ws As Worksheet, ByVal o As Object)
+    total = 3&
+    total = total + 1&
+    label(0&) = "x"
+    label(0&) = label(0&) & "y"
+    ws.Cells(1&, 2&) = total
+    o.prop(1&) = label(0&)
+End Sub
+
+' Main.bas
+    Settings.total = Settings.total + 1&
+    Settings.label(2&) = "z"
+```
+
+#### 3.6.3 Excel / VBA のオブジェクトと遅延バインディングの、引数のあるプロパティへの代入
+
+VBA では `ListBox1.Selected(i) = True`・`ws.Cells(1, 2) = x`・`obj.Prop(i) = v` のように、引数のあるプロパティに代入できる。RAS でも同じ形で書ける。
+
+* **`object` / `any` のメンバー（遅延バインディング）:** `o.prop(i) = v`、既定メンバーの `o(i) = v` を書ける。プロパティは VBA が実行時に探す。値は何でも代入でき、`Set` を付けるかどうかは、ほかの代入と同じく値の型で決まる（値が `any` なら実行時に決める。§2.3）。
+* **型定義のあるホストのメンバー:** 同梱の型定義（`.d.ras`）は、引数のあるプロパティとメソッドをどちらも `Name(args): T` と書くので、構文からは区別できない。代入できるのは、ドキュメントコメントに `@property` と記したメンバーだけである（§16.1.2）。記していないメンバーの呼び出しへの代入は `E0325`（メソッドの戻り値への代入を見逃さないため）。同梱の型定義では次のものに付けてある。
+  * MSForms: `ListBox` / `ComboBox` の `list(index, column)`・`column(column, index)`、`ListBox` の `selected(index)`。型はそのプロパティの型（`selected` は `boolean`、`list` は `any`）で照合する。引数をすべて省略した形にも代入できる（`this.lstItems.list = rows`）。
+  * `Scripting.Dictionary`: `d.item(key) = v` と既定メンバーの `d(key) = v`（`d[key] = v` と同じ）。
+  * Excel: セル範囲を返す `range(...)`・`cells(...)`・`rows(...)`・`columns(...)`（`Application`・`Worksheet`・`Range` のものと、修飾しないグローバル）、`Range` の `item(...)`・`offset(...)`・`resize(...)` と既定メンバー（`rng(1, 2)`）。行・列の番号で書く `ws.range(上, 左, 下, 右)`（§9.4.2）も同じ。
+* **セル範囲を返すプロパティへの代入:** `ws.cells(1, 2) = v` は、VBA と同じく、返ってきたセル範囲の既定メンバー（`Value`）への代入である（`ws.cells(1, 2).value = v` と同じ結果）。値は `value` の型（`cellValue`）で照合し、VBA には `ws.Cells(1, 2) = v` をそのまま、常に `Set` なしで出力する。オブジェクト型の値は代入できない（`E0325`。VBA では `Set` が要るが、このプロパティには `Set` できない）。`+=` と `++` も使える（`ws.cells(1, 2) += 1`）。セルの値の一括転送（§9）は `.value` と書いた読み書きだけを対象にするので、ループの中では `.value` を書くほうがよい。
+* セル範囲以外のオブジェクトを返すプロパティ（`workbooks.item(1)` など）の呼び出しには代入できない（代入するメンバーを書く）。
+* **プロジェクトの型定義:** プロジェクトの `.d.ras` に書いたホストのメンバーも、ドキュメントコメントに `@property` を書けば同じように代入できる。
 
 ---
 
@@ -816,6 +985,70 @@ Private Sub report(ByRef xs() As Long, ByVal s As String)
     Debug.Print CStr(last) & " " & RAS_StrRange(s, 0&, Len(s) - 1&)
 End Sub
 ```
+
+### 4.6 `any` に入れた VBA の配列（複数の添字・`redim` / `redimPreserve` / `erase`）（v0.9で追加）
+
+RAS の配列（`T[]` / `T[][]`）は 0 始まりで、大きさは RAS が管理する（§13.3）。一方、手書きの VBA は、配列を `Variant` に入れて任意の下限・複数の次元で使う（`ReDim a(1 To n, 1 To 3)`、`v = Range("A1:C10").Value` の後の `v(i, j)`、`LBound(v, 2)`）。こうしたコードをそのまま書けるように、`any`（VBA の `Variant`）に入れた配列を、VBA と同じ添字で扱う書き方を用意する。新しく書くコードでは、型の付いた配列（`T[]`）と `range.toArray()` を使う。
+
+```typescript
+function fillTable(rows: int, cols: int): any {
+    let t: any;
+    redim(t, 1, rows, 1, cols);               // ReDim t(1 To rows, 1 To cols)
+    for (let r = 1; r <= rows; r++) {
+        t[r, 1] = r;                          // t(r, 1) = r
+        t[r, cols] = t[r, 1] * 2;
+    }
+    redimPreserve(t, 1, rows, 1, cols + 1);   // ReDim Preserve t(1 To rows, 1 To cols + 1)
+    return t;
+}
+```
+
+```vba
+Private Function fillTable(ByVal rows_ As Long, ByVal cols As Long) As Variant
+    Dim t As Variant
+    Dim r As Long
+    Dim ras_t1 As Variant
+    Dim ras_y1 As Long
+    Dim ras_t2 As Variant
+
+    ReDim t(1 To rows_, 1 To cols)
+    For r = 1 To rows_
+        t(r, 1) = r
+        RAS_Assign ras_t1, t(r, 1) * 2&
+        If IsObject(ras_t1) Then
+            Set t(r, cols) = ras_t1
+        Else
+            t(r, cols) = ras_t1
+        End If
+        ras_y1 = ras_y1 + 1&
+        If (ras_y1 And ras_yieldMask) = 0& Then RAS_Yield
+    Next r
+    ReDim Preserve t(1 To rows_, 1 To cols + 1&)
+    RAS_Assign ras_t2, t
+    If IsObject(ras_t2) Then
+        Set fillTable = ras_t2
+    Else
+        fillTable = ras_t2
+    End If
+End Function
+```
+
+* **複数の添字 `v[i, j]`:** 添字をカンマで区切って書く（`v[i, j]`、`v[i, j, k]`）。VBA の `v(i, j)` になる。読み取り・代入・複合代入（`v[i, j] = x`、`v[i, j] += 1`）に使える。添字は書いたとおりに渡す（0 始まりへの補正はしない。`any` の `v[i]` と同じ）。複合代入の添字は 1 回だけ評価する。
+  * 使えるのは、遅延バインディングで添字を参照できる型（`any`・`cellValue`・`object`）だけ。結果の型は `any`（`cellValue` の要素は `cellValue`）。
+  * 型の付いた配列・タプル・`Map`・文字列にカンマ区切りの添字を書くとエラー（`E0417`）。2 次元配列 `T[][]` の要素は `a[r][c]` と書く。
+* **`redim(a, 下限, 上限, …)`:** `ReDim a(下限 To 上限, …)`。`a` に、その範囲の添字を持つ新しい配列（`Variant()`）を入れる。要素は `Empty`（RAS では `null`。`a[i] == null`）。下限と上限（どちらも含む。`int`）を次元ごとに 2 つずつ書く（1〜60 次元）。`a` がそれまで持っていた値は捨てる。
+* **`redimPreserve(a, 下限, 上限, …)`:** `ReDim Preserve a(…)`。要素を残して大きさを変える。VBA と同じく、変えられるのは最後の次元の範囲だけで、次元の数は変えられない（実行時エラー 9）。要素は先頭から順に残る（下限を変えると添字がずれる）。`array(...)`・`split(...)` の配列や、複数セルの `range.value` にも使える。配列を持っていない変数（`Empty` など）には使えない（実行時エラー 13）。
+* **`erase(a)`:** `Erase a`。配列の要素と添字の範囲を捨てる。`isArray(a)` は `true` のままで、`lBound` / `uBound` と添字の参照は実行時エラー 9、`for...of` は実行時エラー 92 になる（`redim` し直せば使える）。配列を持っていない変数には使えない（実行時エラー 13）。
+* **1 番目の引数:** 型が `any` で、代入できる変数。ローカル変数・引数（`byref` を含む）・モジュール変数・クラスのフィールド（`this.f`）。`const` の変数は不可（`E0323`）。式・配列の要素・プロパティ・ホストのメンバーは不可（`E0418`）。型の付いた配列（`T[]`）も不可（`E0418`。`push` で伸ばすか `new Array<T>(n)` で作り直し、`clear()` で空にする）。添字の範囲が奇数個・0 個のときも `E0418`。
+* **文として使う:** 3 つとも値を返さない（`void`）。値として使うとエラー（`E0370`）。
+* **組み込みの関数:** `lBound(a)` / `uBound(a, 2)`（次元は 1 から）、`isArray(a)`、`typeName(a)`（`"Variant()"`）はそのまま使える。`for (const x of a)` は `For Each` になり、すべての次元の要素を、1 番目の添字が先に進む順（`a[1, 1]`、`a[2, 1]`、…、`a[1, 2]`、…）でたどる。
+* **値としての配列:** VBA の配列は値である。`any` の変数への代入（`const b = a`）、`any` の引数（`ByVal … As Variant`）、関数の戻り値は配列の写しになる（生成コードの `RAS_Assign` は、オブジェクトなら `Set`、それ以外は代入＝コピー）。呼び出し先で書き換えた結果を受け取るには `byref` の引数にする。要素に入れたオブジェクトは参照のまま。
+* **ほかのオブジェクトのフィールド:** `obj.grid[i, j] = x`（`this` 以外のオブジェクトのフィールドに入れた配列の要素への代入）は、VBA がフィールドの値の写しに書き込むため、元の配列は変わらない。そのクラスのメソッドの中（`this.grid[i, j] = x`）で書き換えるか、変数に取り出して書き換えてから戻す。
+* **セルの値:** 複数セルの `range.value`（`cellValue`）は、VBA では 1 始まりの 2 次元配列である。`const v: any = Excel.errorToNull(ws.range("A1:C10").value)` の後、`v[1, 1]`・`lBound(v, 2)`（= 1）・`uBound(v, 1)` と書ける。`range.toArray()` は 0 始まりの RAS の配列（§9.2.1）で、`any` に入れても 0 始まり（`a[0, 0]`）。`redim` で作った配列は `range.value = a` で書き込める（2 次元は行と列、1 次元は 1 行）。
+* **デバッグ実行（JavaScript ランタイム、§14.10）:** `redim` で作った配列は、次元ごとの下限・上限を持つ値として動く（次元の数に制限はない）。添字の参照・`lBound` / `uBound`・`isArray`・`typeName`・`for...of`・代入や `any` の引数でのコピー・`Excel.errorToNull`・`range.value` への書き込み・テストの `toEqual` が対応する。実行時エラーの番号（9・13・92）も VBA に合わせる。ブックの代役（と Excel に接続したとき）の複数セルの `range.value` / `value2` / `formula` は、1 始まりの 2 次元配列として `v[i, j]`・`lBound` / `uBound`・`for...of`・`redimPreserve` に使える。VBA と違う点:
+  * `redim` で作った配列を、`range.value`（と数式・`WorksheetFunction` の引数）以外のホストのメンバー（リスト ボックスの `list` など）に渡すことには対応していない。
+  * VBA は `split(...)` の配列（`String()`）を `redim` / `redimPreserve` しても `String()` のままにする。デバッグ実行では要素の型を区別せず、新しい要素は `null`（VBA では `""`）。
+  * 型の付いた 2 次元配列（`T[][]`）を `any` に入れてから `redimPreserve` することには対応していない（1 次元として扱う）。
 
 ---
 
@@ -1383,7 +1616,7 @@ RAS のファイルと VBA のモジュールは一対一に対応させる。�
 
 * **ファイルのコードは、対応するモジュールにだけ出力する。** あるファイルに書いたコードを、ほかのファイルのモジュールへ書き込むことはしない。シートのイベントハンドラをどのファイルにも書けた v0.9 以前の方式（`@on("Sheet1.Change")`）は廃止した（§12.2）。
 * **モジュールのコードは、対応するファイルだけから生成する。** モジュール全体をそのファイルから生成し、ブックにあるコードの一部だけを RAS が管理することはしない。ドキュメントモジュールの RAS 管理領域は廃止した（§14.6）。例外は、コンパイラが足す定型コードだけである（`ThisWorkbook` に足す初期化の呼び出し（§12.3）、フォームの `RAS_FormInit`（§14.11.5））。
-* **モジュール名:** ファイル名（ディレクトリと拡張子を除く）から決める。先頭の文字と、`_` / `-` / `.` / 空白の次の文字を大文字にし、これらの区切りは取り除く（`report.ras` → `Report`、`mod_util.ras` → `ModUtil`）。数字で始まる名前には `Mod` を前に付け、31 文字までにする。VBA の予約語と同じ名前には末尾に `_` を付ける。`objects/` のファイルは名前を変えず、ファイル名（拡張子を除く）がそのままシートのコード名（`ThisWorkbook`）である。こうして決めた名前が、大文字小文字を区別せずにほかのファイル・シート・フォームの名前と重なる場合はエラーにする（`src/Sheet1.ras` は、コード名 `Sheet1` のシートと重なるのでエラー。シートのコードは `objects/Sheet1.ras` に書く）。
+* **モジュール名:** ファイル名（ディレクトリと拡張子を除く）から決める。先頭の文字と、`_` / `-` / `.` / 空白の次の文字を大文字にし、これらの区切りは取り除く（`report.ras` → `Report`、`mod_util.ras` → `ModUtil`）。数字で始まる名前には `Mod` を前に付け、31 文字までにする。VBA の予約語と同じ名前には末尾に `_` を付ける。そのファイルが同じ名前のクラスを宣言している場合（`Equipment.ras` の `class Equipment`）も、クラスモジュールがその名前になるので、標準モジュールには末尾に `_` を付ける（`Equipment_`）。`objects/` のファイルは名前を変えず、ファイル名（拡張子を除く）がそのままシートのコード名（`ThisWorkbook`）である。こうして決めた名前が、大文字小文字を区別せずにほかのファイル・シート・フォームの名前と重なる場合はエラーにする（`src/Sheet1.ras` は、コード名 `Sheet1` のシートと重なるのでエラー。シートのコードは `objects/Sheet1.ras` に書く）。
 * **ファイルを持たないモジュール:** 次のモジュールはコンパイラが生成するもので、対応する `.ras` ファイルを持たない。
   * `class` 宣言ごとのクラスモジュール（`<クラス名>.cls`）。1 つのファイルに複数のクラスを書ける。ジェネリクスは型引数ごとに 1 つ（§2.4）
   * `RAS_StructMap__…`（§2.5.6）、`RAS_Lambda_…`（§4.1）、`RAS_On_…`・`RAS_Events`（§12.2.3）、`RAS_Runtime`（§7.5）
@@ -1478,7 +1711,7 @@ function onAnySheetChange(sh: object, target: Excel.Range) { ... }
   * そのほかのエラーはフォームと共通: ないイベント（`E0611`）、引数が多すぎる（`E0612`）、関数名が生成するイベント プロシージャ名（`Worksheet_Change`）と同じ（`E0614`）。
   * シートの上の ActiveX コントロールのイベントは `@on("<コントロール名>.<イベント>")`（§12.2.1）、`WithEvents` で受け取るイベントは `@on("<変数名>.<イベント>")`（§12.2.2）で受け取る。
   * `@on` は、どのイベントを受け取るかがコンパイル時に決まる。実行時に決めるとき（同じ処理を多くのコントロールに付ける、条件によって付け外しする）は、`on` / `addEventListener`（§12.2.3）を使う。
-* **変数:** トップレベルの `let` / `const` は、そのモジュールの変数・定数（`Private`）になる。初期値は、標準モジュールの変数と同じ時点で設定する。
+* **変数:** トップレベルの `let` / `const` は、そのモジュールの変数・定数（`Private`）になる。初期値は、標準モジュールの変数と同じ時点で設定する。 リテラルと、先に宣言した定数どうしの整数の加減乗・文字列の連結（`const first = header + 1`）で書いた `const` は、VBA の `Const` になり、初期化を待たずに使える（標準モジュールの定数も同じ）。
 * **公開:** `export function` はそのシート（ブック）の `Public` メンバーになり、ほかのモジュールから `Sheet1.clearInput()` / `thisWorkbook.refresh()` のように呼ぶ（VBA のシートモジュールの `Public` プロシージャと同じ）。シートのコード名と `thisWorkbook` はどこからでも参照できるグローバルなので、`import` は要らない（シート・`ThisWorkbook` のファイルを `import` することはできない）。このファイルから `src/` のモジュールを使うときは、モジュール名で修飾するか（`Main.hoge()`。§12.1.2）、`import` する（`import { hoge } from "src/main"`。§12.1.3）。`export` しない関数は `Private`。
   * 引数なしで呼べる `export function` と `@macro` を付けた関数は、標準モジュールと同じくマクロ入口になる（§12.4 のラップをする）。Excel からは `Sheet1.clearInput` の名前で呼ばれる（ボタンへの登録など）。
 * **書けないもの（`E0650`）:** VBA がドキュメントモジュールに置けないものと、標準モジュールに置かなければ働かないものは、エラーにする。共有したいものは `src/` の標準モジュールに置き、`import` して使う。
@@ -1578,7 +1811,7 @@ export class ButtonWatcher {
 * **変数の条件（`E0615`）:** VBA の `WithEvents` の制限に合わせる。
   * 型は、イベントを持つクラスの型を 1 つだけ書く（`Excel.Application`・`Excel.Workbook`・`Excel.Worksheet`・`Excel.Chart`・`Excel.QueryTable`・`MSForms.CommandButton` などのコントロール）。`object`・`any`・ユニオン型・配列・`Map` は不可。遅延バインディングで出力する型（`Scripting`・`VBScript`、`ras typegen` で生成した型。§15.3）も不可（VBA では `Object` になり、イベントを受け取れない）。
   * `const` は不可（代入して受け取りを始めるため）。`export` は不可。
-  * RAS のクラスはイベントを起こせないので、RAS のクラスの型の変数は対象にならない。
+  * RAS のクラスは、`event` を宣言したクラス（下の「クラスのイベント」）だけが対象になる。ジェネリック クラスは不可。
 * **出力:** 変数は `Private WithEvents app As Excel.Application` と宣言し、ハンドラごとに VBE と同じ宣言のイベント プロシージャ（`Private Sub app_SheetChange(ByVal Sh As Object, ByVal Target As Range)`）を生成して、そこからハンドラを呼ぶ。`@on` で名前を書かれた変数は、リネーム（§13.6）の対象外にする。
 * **イベントの一覧:** コンパイラが、`Excel.Application`・`Excel.Workbook`・`Excel.Worksheet`・`Excel.Chart`・`Excel.QueryTable` と Microsoft Forms のコントロールのイベント（名前と引数）を持つ。Microsoft Forms のコントロールでは、フォームが起こす `Enter` / `Exit` / `BeforeUpdate` / `AfterUpdate` は受け取れない。これ以外のクラス（`Office` のクラスなど）のイベントは検査せず、ハンドラの引数を VBE が作るイベント プロシージャの宣言どおりに書く（§12.2.1 の「種類の分からないもの」と同じ）。
 * 複数のハンドラ・再入防止・エラーの表示・引数の受け取り方は、シートのイベント（§12.2）と同じ。エラー: その名前の変数もコントロールも無い（`E0613`）、その型にないイベント（`E0611`）、引数が多すぎる（`E0612`）、関数名が生成するイベント プロシージャ名（`app_SheetChange`）と同じ（`E0614`）。
@@ -1588,6 +1821,33 @@ export class ButtonWatcher {
   * `Application` を指す変数には、プロジェクトのブックのイベントを起こす。ブックの `Sheet…` のイベントは同じ名前で（`SheetChange`）、ブック自身のイベントは `Workbook` を付けた名前で、ブックを先頭の引数にして起こす（`BeforeSave` → `WorkbookBeforeSave(wb, saveAsUI, cancel)`）。
   * 呼ぶ順序は、ファイルに書いたシート・ブックのハンドラ、続いて変数のハンドラ（登録した順）。変数に `null` を代入すると呼ばれなくなる。使われなくなったクラスのインスタンスのハンドラは呼ばれなくなる。
   * コントロール（`MSForms`）を指す変数のハンドラは呼ばない。
+
+**クラスのイベント（`event`）:** クラスに `event 名前(引数);` と書くと、そのクラスのオブジェクトが起こすイベントになる（VBA の `Event`）。イベントは、メソッドと同じ書き方で呼ぶと起きる（VBA の `RaiseEvent`）。受け取る側は、そのクラスの型の変数・フィールドに `@on("<変数名>.<イベント>")` を書く。
+
+```typescript
+// src/Bell.ras
+export class Bell {
+    event Rang(times: int, byref heard: int);
+
+    ring(times: int): int {
+        let heard = 0;
+        this.Rang(times, heard);     // RaiseEvent Rang(times, heard)
+        return heard;                // 受け取った側が byref の引数に入れた値
+    }
+}
+
+// objects/Sheet1.ras
+let doorBell: Bell;
+
+@on("doorBell.Rang")
+function onRang(times: int, byref heard: int) { heard += times; }
+```
+
+* **宣言:** 本体は書かない。戻り値・`static`・型引数・省略可能な引数・可変長引数・`private` / `protected` は書けない（`E0619`）。`byref` の引数は、ハンドラが値を返すのに使える。
+* **起こす:** `this.Rang(...)` のほか、クラスの外から `doorBell.Rang(...)` と呼んでも起きる。ハンドラは、その時点でそのオブジェクトを入れている変数の分だけ、同期的に呼ばれる。受け取る変数が無ければ何も起きない。
+* **出力:** クラス モジュールに `Public Event Rang(ByVal times As Long, ByRef heard As Long)` と、イベントを起こすプロシージャ `Public Sub RAS_Raise_Rang(…)`（中身は `RaiseEvent Rang(…)`）を生成する。呼び出しは `RAS_Raise_Rang` の呼び出しになる。受け取る側の変数は `Private WithEvents doorBell As Bell` になり、イベント プロシージャの引数はイベントの宣言どおりになる。
+* **Excel なしの実行:** `ras run` / `ras test` でも、同じ規則でハンドラを呼ぶ。
+* **VBA の取り込み（§14.7.1）:** クラス モジュールの `Public Event …` は `event …;` に、`RaiseEvent 名前(…)` は `this.名前(…)` になる。 クラスの `Private WithEvents x As …` と `x_イベント` のプロシージャは、フィールドと `@on("x.イベント")` のメソッドになる。
 
 #### 12.2.3 実行時に付けるイベントハンドラ（`on` / `addEventListener`）（v0.9で追加）
 
@@ -1805,7 +2065,7 @@ RAS は以下のすべての経路から `RAS_EnsureInit` を呼び、初期化�
 ### 13.3 文字列・配列・コレクション
 
 * **文字列は RAS で 0 始まり:** `s.substring(i, j)`, `s[i]`, `s.indexOf(x)` は `Mid$`, `InStr` の 1 始まりに自動補正する。
-* **配列は常に 0 始まり:** `Option Base` に依存しないよう、配列生成は常に下限を明示（`ReDim a(0 To n - 1)`）する。
+* **配列は常に 0 始まり:** `Option Base` に依存しないよう、配列生成は常に下限を明示（`ReDim a(0 To n - 1)`）する。例外は、手書きの VBA と同じ添字で扱うために `any` に入れた配列（`redim(a, 1, n)` で作った配列、複数セルの `range.value`）だけで、その添字は VBA のまま（§4.6）。
 * **空配列に `UBound` でエラー:** `arr.length` はランタイム `RAS_Len`（未割り当て・`Erase` 済みでも 0 を返す）に変換する。`For` 変換時は長さ 0 のガードを付ける。
 * **`ReDim Preserve` の O(n²):** ループ内の `push` は容量倍増方式に変換する（非公開の容量変数を持ち、ループ後に実サイズへ切り詰める）。
 * **`Collection` は 1 始まり:** RAS の `Collection` ラッパは 0 始まりで添字を補正する。
@@ -1931,8 +2191,10 @@ Offset  Size  内容
 | 標準モジュール `Module1` | `src/Module1.ras` | `RAS-GENERATED` 行が無く、コードがある。プロジェクトに同名のモジュール（ファイル）が無い |
 | シート `Sheet1`・`ThisWorkbook` のモジュールの手書きのコード | `objects/Sheet1.ras`・`objects/ThisWorkbook.ras`（§12.2） | `RAS-GENERATED` 行が無く、コードがある（`Option` 文・コメントだけのものは対象外）。対応するファイルが無いか、あってもコードが無い（§14.7.2 で作成したままのファイルは、取り込んだ内容で置き換える） |
 | VBE で作ったユーザーフォーム `frmInput` | `forms/frmInput.form.json`・`forms/frmInput.ras`（§14.11.6 と同じ） | 目印の行（`' RAS-FORM`）が無い。`forms/` に同名のファイルが無い |
+| クラスモジュール `Equipment` | `src/Equipment.ras` の `export class Equipment` | `RAS-GENERATED` 行が無く、コードがある。プロジェクトに同名のモジュール（ファイル）が無い |
 
-* クラスモジュールは取り込まない（そのまま残る）。
+* **クラスモジュール:** モジュールの変数はフィールド（`Private` は `private`）、プロシージャはメソッド、`Property` はアクセサー（§3.6）、`Class_Initialize` は `constructor()` にする。クラスの中の修飾しない参照には `this.` を付ける。定数と列挙型はクラスの前（ファイルのトップレベル）に置く。ファイル名がクラス名と同じなので、そのファイルの標準モジュールの名前は `Equipment_` になる（§12.1.1）。自作のイベント（`Event` / `RaiseEvent`）は `event` の宣言とその呼び出しにする（§12.2.2）。`Class_Terminate`・`Implements` には対応しない（`// TODO(VBA):`）。
+* **VBA のまま残すもの:** RAS に書けないもの（`Declare`、`#If … #End If` で囲んだ宣言とプロシージャ、変換できない文のあるプロシージャ、変換してもコンパイルできないプロシージャ）は、`// TODO(VBA):` にせず、`vba` ブロック（§14.7.4）として VBA のまま取り込む。
 * **変換:** `ras form pull` と同じ VBA → RAS の変換（§14.11.6）を使う。標準モジュールでは、`Public`（または省略）のプロシージャ・変数・定数・列挙型を `export` し、`Private` のものはそのモジュールの中だけのものにする。取り込むモジュール同士の参照は、修飾しない呼び出しを `import` にする（`Total(1)` → `import { Total } from "src/Module1"`）。モジュール名で修飾した呼び出し（`Module1.Total(1)`）は、`import` なしでそのまま使う（§12.1.2）。
 * **シート・`ThisWorkbook`:** そのモジュールのファイル（§12.2）に変換する。標準モジュールに移すことはしないので、ほかのモジュールからの `Sheet1.Foo` の呼び出しも、ボタンに登録されたマクロ名（`Sheet1.Foo`）も、そのまま使える。
   * イベント プロシージャ（`Worksheet_Change`、`Workbook_Open` など）は `@on("Worksheet.Change")` / `@on("Workbook.Open")` を付けた関数にする。
@@ -2008,6 +2270,66 @@ RAS が生成したモジュール（`RAS-GENERATED` 行がある）を VBE で�
   * 追記したファイルがコンパイル エラーになる場合（ファイルにある名前と重なる、プロジェクトに無い手書きのプロシージャを呼んでいるなど）は、ファイルを追記の前の内容に戻し、ドリフトとして扱う。
 * **書き込み:** 取り込んだ後のファイルから生成したコードで、そのモジュールを書き換える（上書きの指定は不要）。ドリフトが残っているモジュールは、足されたものだけを取り込み、モジュールには書き込まない（ドリフトの選択を待つ。「RAS で上書き」を選ぶと、取り込んだ後のファイルから生成したコードで書き換える）。
 * 同期の結果に、取り込んだプロシージャの名前と追記先のファイルを表示する。
+
+#### 14.7.4 VBA のまま書くブロック（`vba`）と、取り込みでの型に基づく書き換え（v0.9で追加）
+
+**`vba` ブロック:** ファイルのトップレベルに `` vba`…` `` と書くと、バッククォートの中の VBA を、そのファイルのモジュールにそのまま出力する。RAS に書けない VBA（`Declare` の `As Any`、条件付きコンパイル、後ろへ飛ぶ `GoTo` など）を、プロジェクトの中に置いておくためのものである。
+
+```typescript
+// src/Util.ras
+vba`
+Private Declare PtrSafe Function SafeArrayAllocDescriptor Lib "oleaut32" ( _
+        ByVal cDims As Long, ByRef ppsaOut() As Any) As Long
+`;
+
+vba`
+Public Function EmptyLongArray() As Long()
+    If SafeArrayAllocDescriptor(1, EmptyLongArray) <> 0 Then Err.Raise 5
+End Function
+`;
+export declare function EmptyLongArray(): any;
+
+export function demo(): int {
+    return uBound(EmptyLongArray());   // -1
+}
+```
+
+* **書ける場所:** `src/` のモジュール、`objects/` のファイル、フォームのコードビハインドのトップレベル。型定義ファイル（`.d.ras`）とクラスの中には書けない。
+* **中身:** 書いたとおりに出力する。エスケープ（`\n`）も `${…}` も解釈しない。`` ` `` は書けない。行番号（`Erl` 用）は付けない。
+* **出力する位置:** プロシージャ（`Sub` / `Function` / `Property`）を含むブロックは、そのモジュールの生成したプロシージャの後ろに、含まないブロック（`Declare`・変数・`#If` で囲んだ宣言）は宣言部に出力する。
+* **RAS からの呼び出し:** ブロックの中のプロシージャは RAS からは見えない。呼び出すには、同じファイルに `declare function 名前(引数): 戻り値の型;`（`Sub` は `void`。ほかのモジュールからも使うなら `export`）を書く。宣言した名前はそのまま出力される（`Trim` のような VBA の関数と同じ名前でも `_` は付かない）。シート・フォームのファイルで `export declare function` と宣言した名前は、`export function` と同じく、そのシート・フォームのメンバーになる（ファイルの中からは `Foo(...)` / `this.Foo(...)`、ほかのモジュールからは `Sheet1.Foo(...)`）。イベント プロシージャ（`Worksheet_Change` など）をブロックに書いたときは、宣言は書かない（Excel が呼ぶ）。`ThisWorkbook` の `Workbook_Open` は、コンパイラが生成するため（§12.3）ブロックには書けない。
+* **ブロックの中から RAS のコードを呼ぶとき:** 生成される VBA の名前で書く。列挙型のメンバーは `列挙型_メンバー`（`Level_lvHigh`）、VBA の関数と同じ名前の関数・変数は末尾に `_` が付く（`Trim_`）。
+* **モジュールの公開範囲:** `vba` ブロックのあるモジュールには `Option Private Module` を付けない。
+* **Excel なしの実行（`ras run` / `ras test`）:** ブロックは実行されない。宣言した関数を呼ぶと実行時エラーになる。
+
+**取り込み（§14.7.1）での扱い:** 取り込みは、変換（VBA → RAS）の後で、次の順に仕上げる。
+
+1. **型に基づく書き換え:** VBA が暗黙に行うことのうち、型が分からないと決められないものは、取り込んだファイルをプロジェクトとして型チェックし、その結果で書き換える。書き換えは、VBA と同じ結果になるものに限る。
+
+   | 変換した RAS | 型 | 書き換え |
+   |---|---|---|
+   | `if (n)`・`while (n)` | 数値・列挙型 | `n != 0` |
+   | `!n` | 整数 | `~n`（VBA の `Not` はビット演算） |
+   | `a && b`・`a \|\| b` | 整数（片方は `any` でもよい） | `a & b`・`a \| b` |
+   | 値として使った `Range`（比較・代入・文字列への埋め込み・条件） | `Excel.Range` | `.value` を付ける（既定メンバー） |
+   | `f(…) = v`（関数が `Range` を返す） | `Excel.Range` | `f(…).value = v` |
+   | 数値・文字列・日付・真偽値の間の代入 | — | `cStr(x)`・`cLng(x)`・`x as int` など。真偽値 → 数値は `(x ? -1 : 0)`、数値 → 真偽値は `x != 0` |
+   | 数値と文字列・真偽値の比較 | — | 文字列は `cDbl(x)`、`true` / `false` は `-1` / `0` |
+   | `letValue(x)`（`Set` を付けない代入の右辺） | `Range` は `x.value`、数値・文字列などは `x` | 型が分からないもの（`any`・`object`）は `letValue(x)` のまま残る |
+
+   `ras check --fix` の機械的な修正（Excel / VBA のメンバーの綴りなど）も同時に行う。
+2. **コンパイルできないプロシージャ:** 1 の後もエラーが残るプロシージャは、そのプロシージャだけを `vba` ブロック（と `declare function`）に置き換えて、取り込み直す。元の VBA に誤りがあるプロシージャ（VBA は使うまでコンパイルしないので、使われていないプロシージャの誤りは残りやすい）も、こうして元のまま残る。ブロックの中の、プロジェクトの名前（列挙型のメンバー・`Trim_` のような名前）は、生成される VBA の名前に書き換える。クラスのメソッドと `Property` は `vba` ブロックにできないので、エラーのまま残る。
+3. 同期の結果に、VBA のまま残したプロシージャの名前を表示する。
+
+**取り込みが使う組み込み:**
+
+| 名前 | 意味 | VBA |
+|---|---|---|
+| `letValue(x)` | VBA の `v = x`（`Set` なし）が入れる値。`x` がオブジェクトなら既定メンバーの値（`v = ws.Range("A1")` はセルの値）、それ以外は `x` | `RAS_LetValue(x)` |
+| `dynamicArray()` | `Dim a()` が宣言する、まだ要素のない配列（`isArray` は真、`uBound` は `redim` するまで実行時エラー 9）。`any` の変数の初期値に使う（§4.6） | `RAS_DynamicArray()` |
+| `isAllocated(a)` | 配列に要素を入れる場所があるか（`dynamicArray()` のままの配列と `erase` した後は偽）。VBA のコードの `Not Not a`（配列変数）をこれに、`Not a` を `(isAllocated(a) ? 1 : -1)` にする | `RAS_IsAllocated(a)` |
+
+VBA の配列は、宣言した下限のまま扱うため、取り込みでは `any`（§4.6）にする（`Dim a() As String` → `let a: any = dynamicArray();`、`ReDim a(1 To n)` → `redim(a, 1, n);`、`a(i, j)` → `a[i, j]`）。
 
 ### 14.8 ソースマップとデバッグ
 
@@ -2389,6 +2711,8 @@ xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 ```typescript
 // forms/frmInput.ras
 let count = 0;
+/** OK で閉じたか（他のモジュールから `frmInput.accepted` で読み書きできる）。 */
+export let accepted = false;
 
 @on("UserForm.Initialize")
 function init() {
@@ -2403,6 +2727,7 @@ function ok() {
         return;
     }
     count++;
+    accepted = true;
     this.hide();
 }
 
@@ -2431,9 +2756,12 @@ export function enteredName(): string {
 * **変数:** トップレベルの `let` / `const` はフォームのモジュール変数（`Private`）になる。初期値は `UserForm_Initialize` の先頭で設定する（`Initialize` のハンドラが無くても生成する）。フォームのインスタンスごとに持つ。
 * **インスタンスと戻り値:** `function constructor(...)` を書くと `new frmInput(...)` で引数を渡してインスタンスを作れ、`this.close(値)` の値を `showModal()` で受け取れる（§14.11.9）。
 * **公開:** `export function` はフォームの `Public` メンバーになり、他のモジュールからフォームの既定のインスタンス経由で `frmInput.enteredName()` のように呼べる。フォーム名はどこからでも参照できるグローバル（既定のインスタンス）で、`frmInput.show()` のように使う。`export` しない関数は `Private`。コードビハインドの関数はマクロ入口にならない（§12.4 のラップもしない）。
+* **公開の変数（`export let`）:** `export let accepted = false;` はフォームのモジュールの `Public` 変数になり、他のモジュールからフォームのメンバーとして読み書きできる（既定のインスタンスは `frmInput.accepted`、`new` で作ったインスタンスは `f.accepted`。コードビハインドの中では `accepted` でも `this.accepted` でもよい）。値はインスタンスごとに持ち、初期値はほかの変数と同じく `UserForm_Initialize` の先頭で設定する。型注釈は省略できる（初期値から推論する）。VBA の識別子として使えない名前は、標準モジュールの変数と同じく `_` を付けて出力する（`name` → `name_`）。
+  * `export const` は書けない（VBA のオブジェクト モジュールは `Public Const` を持てない。`E0630`）。配列（`any[]` 以外）・構造体の変数も `export` できない（同じく公開できないため。`E0643`）。値を返す関数を `export` する。
+  * コントロール・公開する関数と同じ名前（大文字小文字を区別しない）は付けられない（`E0101`）。`export` していない変数は、他のモジュールから参照できない（`E0202`）。
 * **`WithEvents`:** トップレベルの変数のイベントは、`@on("<変数名>.<イベント>")` で受け取れる（§12.2.2）。
 * **実行時に付けるハンドラ:** 同じ処理を多くのコントロールに付けるときは、`Initialize` のハンドラで `this.controls.on("Change", (c) => …)` / `[this.txtA, this.txtB].on("Change", …)` / `this.btnOK.on("Click", …)` のように付ける（§12.2.3）。フォームが閉じると外れる。
-* **書けないもの（`E0630`・`E0632`）:** トップレベルの文、クラス・インターフェイス・構造体・`declare module`、`export` した変数・列挙型・型エイリアス、`@macro` / `@init` / `@udf` / `@ribbon`、拡張メソッド。共有したいものは `src/` のモジュールに置き、`import` して使う（コードビハインドは `import` できる。コードビハインドを `import` することはできない）。
+* **書けないもの（`E0630`・`E0632`）:** トップレベルの文、クラス・インターフェイス・構造体・`declare module`、`export` した定数・列挙型・型エイリアス、`@macro` / `@init` / `@udf` / `@ribbon`、拡張メソッド。共有したいものは `src/` のモジュールに置き、`import` して使う（コードビハインドは `import` できる。コードビハインドを `import` することはできない）。
 * `.form.json` が無い `forms/<Name>.ras` はエラー（`E0631`）。
 * デバッグ実行（§14.10）では、フォームを VS Code のパネルに表示してコードビハインドを動かす（§14.10.7）。Excel 本体でフォームを表示して動かすのは「Excel で実行」（§14.11.8）。
 
@@ -2517,7 +2845,9 @@ End Sub
   * `If` / `Select Case`（`if` の連鎖にする）/ `For` / `For Each` / `Do … Loop` / `While … Wend` / `With`（対象を繰り返し書くか、一時的な `const` に入れる）/ `Exit` を変換する。`On Error Resume Next` … `On Error GoTo 0` は `try { … } catch { resume; }`、`On Error GoTo <ラベル>` … `Exit Sub` / `<ラベル>:` … は `try { … } catch (e) { … }`（ハンドラ内の `Err.Number` / `Err.Description` は `e.code` / `e.description`）にする。
   * `Function` の戻り値（`関数名 = 値`）は `return` かローカル変数 `result` にする。引数は `ByVal` が既定になるため、`ByVal` の無い引数はプロシージャ内で代入している場合だけ `byref` にする。
   * RAS が書き込んだフォームのコード（`.ras` の無いプロジェクトへ取り出したとき）は、生成したイベント プロシージャを `@on` に、変数の初期化（`RAS_ModInit`）を変数の初期値に戻す。行番号（`Erl` 用）は捨てる。
-  * 変換できないもの（`GoTo` / 行ラベル、`ReDim`、大きさを指定した配列、`Like`、日付リテラル、`Static`、引数を取るプロパティへの代入、ユーザー定義型・`Declare`・`Public` 変数（フォーム内の変数にする）など）は、元の行を `// TODO(VBA): <理由>` のコメントとして残し、コマンドの出力に警告（ファイルと行）として表示する。変換結果は必ずしもそのままコンパイルできるとは限らない。`ras check` で確認して直す。
+  * `Property` はアクセサー（`get` / `set`。§3.6）、`ParamArray` は可変長引数（§3.5）、`Like` は `like(…)`、`Null` は `dbNull`、`Empty` は `null`、`Static` 変数はプロシージャ名を付けたファイルの変数、`Public` 変数は `export let` にする。配列は宣言した下限のまま扱うため `any` にする（`Dim a()` → `dynamicArray()`、`ReDim` → `redim` / `redimPreserve`、`a(i, j)` → `a[i, j]`、`Erase` → `erase`。§4.6）。引数を取るプロパティへの代入（`lst.Selected(i) = True`）はそのまま書く（§3.6.3）。`Cells(…) = x` のように `Range` に代入しているものは `.value` を補う。`Set` を付けない代入の右辺がオブジェクトかもしれないときは `letValue(…)` で包む（§14.7.4）。
+  * 後ろのラベルへ飛ぶ `GoTo`（`GoTo Finally` … `Finally:`）は、ラベルまでをラベル付きの `do { … } while (false);` にし、`GoTo` を `break` にする。`Mid(s, i, n) = x` は `left` / `mid` の式にする。ブロックの中の `Dim` は、プロシージャの先頭での宣言にする（VBA の変数はプロシージャ全体で有効なため）。
+  * 変換できないもの（前へ飛ぶ `GoTo`、日付リテラル、ユーザー定義型、`Declare`、条件付きコンパイル、自作のイベントなど）は、元の行を `// TODO(VBA): <理由>` のコメントとして残し、コマンドの出力に警告（ファイルと行）として表示する。変換結果は必ずしもそのままコンパイルできるとは限らない。`ras check` で確認して直す。同期での取り込み（§14.7.1）では、こうしたものは VBA のまま `vba` ブロックに取り込み、型に基づく書き換えも行う（§14.7.4）。
 * **リストの項目:** ブックには保存されていないので取り出せない。`--force` で既存の `.form.json` を置き換えるときは、同名の `ComboBox` / `ListBox` の `list` / `selectedIndex` と、画像の `picture.path` を既存のファイルから引き継ぐ（そのパスのファイルを書き込み時と同じ規則で変換した結果が、ブックの画像と一致する場合。PNG などを指定していたフォームは、取り込み直しても PNG を指したままになる）。
 * **取り込めないもの:** FormSpec で表せないプロパティ（`helpContextId`、`accelerator`、`Frame` の `scrollBars` など）は、コントロールごとに `unsupported` に名前を記録し、コマンドの出力に警告として表示する。フォントの内容（`textProps`）は、書き戻して同じになるもの（`font` の各項目、VBE が保存する `pitchAndFamily`、太字などに付く `CFE_AUTOCOLOR`、無効のコントロールの淡色の指定、`CommandButton` の中央揃え）だけなら報告しない。これらは `forms/` から書き戻すと既定値になる。組み込み以外のコントロール（ActiveX）は `type: "Control"` として記録され、生成できない。BMP / JPEG / アイコン以外の画像（メタファイルなど）は取り出せず、`unsupported` に `picture`（`mouseIcon`）が残る（この場合は置き換える画像か `{ "remove": true }` を書くまで生成できない）。
 * 取り出しただけではブックは変わらない。VBE で作ったフォームを `forms/` の内容で置き換えるには、`ras pack --overwrite`（または `ras sync --overwrite`）を実行する。
@@ -3703,6 +4033,42 @@ export function readLines(path: string): string[] {
 * **デバッグ実行:** Excel のないデバッグ実行・テスト・プレイグラウンドでは、ランタイム（`ras-scripting.js`）がファイル番号の表を持ち、日本語版 Windows の VBA と同じ形式で読み書きする（テキストは ANSI（Shift_JIS）と CR LF、`Write #` の形式、`Get` / `Put` のバイト列、`forRandom` の文字列の長さ（2 バイト））。エラーも VBA の番号（52 ファイル番号が不正、53 ファイルが見つからない、54 モードが不正、55 既に開かれている、59 レコード長が不正、62 ファイルの終わり、63 レコード番号が不正、67 ファイルが多すぎる、75 パス名が無効）。`lock` / `unlock` は開いているかだけを確かめ、ロックはしない。`Get` / `Put` の `Variant` とオブジェクトには対応していない（エラー 445）。
 * **手書き VBA の取り込み（§14.7.1）:** これらのステートメントは上の関数に変換する（`Open p For Input As #1` → `fileOpen(1, p, forInput)`、`Line Input #1, s` → `s = lineInput(1)`、`Input(5, #1)` → `inputString(1, 5)`）。`Print #` の `,`（次のタブ位置）・`Spc` / `Tab` は変換しない（TODO として残す）。
 
+#### 15.3.3 `Like` 演算子と `Null`（`like` / `dbNull`）（v0.9で追加）
+
+VBA の `Like` 演算子と `Null` は、関数でも変数でもないキーワードである。RAS では、組み込みの関数 `like` と定数 `dbNull` として書く。
+
+```typescript
+export function isCode(s: string): boolean {
+    return like(s, "[A-Z]##-*");
+}
+
+export function clearMemo(rs: object) {
+    rs.fields("memo").value = dbNull;
+    if (isNull(rs.fields("note").value)) {
+        rs.fields("note").value = "";
+    }
+}
+```
+
+```vba
+Public Function isCode(ByVal s As String) As Boolean
+    isCode = s Like "[A-Z]##-*"
+End Function
+
+Public Sub clearMemo(ByVal rs As Object)
+    rs.fields("memo").Value = Null
+    If IsNull(rs.fields("note").Value) Then
+        rs.fields("note").Value = ""
+    End If
+End Sub
+```
+
+* **`like(text: string, pattern: string): boolean`:** `text Like pattern` を出力する。パターンは VBA のもの: `?` は任意の 1 文字、`*` は 0 文字以上、`#` は数字 1 文字、`[abc]` / `[a-z]` は並べた文字（範囲）のどれか 1 文字、`[!abc]` はそれ以外の 1 文字。`[*]`・`[?]`・`[#]`・`[[]` はその文字自身。生成するモジュールは `Option Compare Binary` なので、大文字小文字・全角半角を区別する（区別しない比較は `like(s.toUpperCase(), "A*")` のように揃えてから行う）。パターンが正しくない（`[` が閉じていない、範囲が逆順）ときは実行時エラー 93。プロジェクトが `like` という名前の関数を宣言していれば、そちらが優先される。
+* **`dbNull`（`any`）:** VBA の `Null` を出力する。データベースのフィールドやコントロールの値に `Null` を入れるとき、`Null` を返すときに使う。値が `Null` かどうかは `isNull(v)` で確かめる。
+  * RAS の `null` は `Null` ではない: `any` に入れると `Empty`、オブジェクト型では `Nothing` になる（§13.2）。`v == null` と `v ?? x` は、`Empty`・`Nothing`・`Null` のどれも値なしとして扱う（`RAS_IsNullish`）。
+  * `dbNull` はオブジェクトではないので、`any` への代入は `Set` の判定（`RAS_Assign`）をせずに `v = Null` と出力する。`Null` を数値・文字列などの型の変数に入れると、VBA と同じく実行時エラー 94（Null の使い方が不正です）になる。テンプレート文字列・`+` での文字列化は空文字列（`RAS_Str`）。
+* **デバッグ実行（§14.10）:** `like` はランタイムが同じ規則で判定する。`dbNull` は `Empty`（`null`）とは別の専用の値で、`isNull(dbNull)` は `true`、`isEmpty(dbNull)` は `false`、`typeName(dbNull)` は `"Null"`、`varType(dbNull)` は `1`（`vbNull`）。`==` での比較は `false`（VBA では結果が `Null` になり、条件として偽）。Excel に接続した実行では COM に `Null`（`VT_NULL`）として渡し、ブックの代役ではセルへの代入を空のセルにする（Excel と同じ）。COM から受け取った `Null` は、これまでどおり `null`（`Empty`）として読む。
+
 ---
 
 ## 16. エディタ支援（IntelliSense）とドキュメントコメント
@@ -3743,6 +4109,7 @@ export function lastRow(this: Excel.Worksheet, col: int = 1): int { ... }
 | `@deprecated 説明` | 非推奨。使用箇所に取り消し線と警告を表示する |
 | `@see` / `{@link 名前}` | 関連項目へのリンク。`{@link}` はクイック情報内で定義へジャンプできるリンクになる |
 | `@since` | 追加されたバージョン |
+| `@property` | 型定義（`.d.ras`）の、引数のあるメンバー専用。そのメンバーがメソッドではなく引数のあるプロパティであることを示し、呼び出しの形への代入（`listBox.selected(i) = true`、`ws.cells(1, 2) = v`）を許す（§3.6.3） |
 | `@emitAs 名前` | 型定義（`.d.ras`）のプロパティ専用。生成コードでは、そのプロパティの代わりに `名前` のプロパティを参照する。同じ値を返し、より多くの場合に使える後継のプロパティがあるときに使う（`Range.Count` → `CountLarge`。`count` は Long の上限を超える範囲（シート全体の `cells` など）でエラーになるため）。ソースには従来の名前（`count`）を書く |
 
 * JSDoc の型注釈（`@param {string} x` の `{string}`）は無視する。型はコード上の型注釈を正とする。

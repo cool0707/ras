@@ -519,6 +519,11 @@ pub fn target_at(prog: &Program, m: ModuleId, offset: u32) -> Option<(Target, Sp
 /// implement an interface (spec §16.2).
 pub fn related(prog: &Program, t: &Target) -> Vec<Target> {
     let (class, name, is_static) = match t {
+        // The getter and the setter of a property of a module (spec §3.6).
+        Target::Fn(f) if prog.fns[*f].accessor.is_some() => {
+            let (get, set) = prog.accessor_pair(*f);
+            return [get, set].into_iter().flatten().map(Target::Fn).collect();
+        }
         Target::Fn(f) => match prog.fns[*f].kind {
             FnKind::Method { class, is_static }
             | FnKind::Getter { class, is_static }

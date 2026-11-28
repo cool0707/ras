@@ -39,6 +39,23 @@ function sum(xs: int[]): int {
     return s;
 }
 
+function joinAll(head: string, sep: string = "-", ...parts: any[]): string {
+    parts.push("end");
+    return `${head}${parts.length}:${parts.join(sep)}`;
+}
+
+class Bag {
+    all: any[];
+    constructor(first: int, ...more: any[]) {
+        this.all = more;
+        this.all.push(first);
+    }
+    add(...more: any[]): int {
+        for (const m of more) this.all.push(m);
+        return this.all.length;
+    }
+}
+
 function describe(c: Color): string {
     switch (c) {
         case Color.Red: return "red";
@@ -178,4 +195,43 @@ export function run() {
     const tt = tm.transpose();
     tt[0][0] = 9;
     console.log("transpose", tt.rows, tt.cols, tt[2][0], tt[0][1], tm[0][0], tt.transpose()[1][0], new Array<string>(0, 0).transpose().rows);
+    // Rest parameters (spec §3.5): the extra arguments as a 0-based `any[]`, empty without them.
+    const sack = new Bag(1, "a", 2.5);
+    console.log("rest", joinAll("h"), joinAll("", "+", 1, "b", true), joinAll("", sep: "/"), sack.add(), sack.add(9, null), sack.all.join());
+    // `like` is VBA's `Like` (binary comparison): `?`, `*`, `#`, `[list]`, `[!list]`.
+    console.log("like", like("abc", "a*"), like("abc", "A*"), like("a1c", "a#c"), like("abc", "a?c"), like("abc", "a[a-c]c"), like("abc", "a[!a-c]c"), like("a*c", "a[*]c"), like("", "*"), like("ab", "a"), like("x.y", "x.y"), like("xzy", "x.y"));
+    // `dbNull` is VBA's `Null`: not `Empty`, but no value for `== null` and `??` either.
+    const dn: any = dbNull;
+    const en: any = null;
+    console.log("dbnull", isNull(dn), isNull(en), isEmpty(dn), isEmpty(en), dn == null, en == null, typeName(dn), varType(dn), dn ?? "d", isNull(dbNull), `[${dn}]`);
+    // An event of a class (spec §12.2.2): the handlers of the fields that hold the object run.
+    const gong = new Bell();
+    const near = new Listener(gong);
+    const far = new Listener(new Bell());
+    console.log("event", gong.ring(2), gong.ring(3), near.total, far.total);
+}
+
+class Bell {
+    event Rang(times: int, byref heard: int);
+
+    ring(times: int): int {
+        let heard = 0;
+        this.Rang(times, heard);
+        return heard;
+    }
+}
+
+class Listener {
+    private source: Bell;
+    total = 0;
+
+    constructor(from: Bell) {
+        this.source = from;
+    }
+
+    @on("source.Rang")
+    private heardIt(times: int, byref heard: int) {
+        this.total += times;
+        heard++;
+    }
 }

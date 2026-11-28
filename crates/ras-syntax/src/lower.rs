@@ -125,6 +125,15 @@ pub fn unescape(s: &str) -> String {
     out
 }
 
+/// `get` or `set` of an accessor: the keyword is the last bare identifier before the NAME node.
+fn accessor_kind(n: &SyntaxNode) -> AccessorKind {
+    if sig_tokens(n).any(|t| t.kind() == IDENT && t.text() == "set") {
+        AccessorKind::Set
+    } else {
+        AccessorKind::Get
+    }
+}
+
 impl Lower {
     pub(crate) fn new() -> Self {
         Lower {
@@ -194,9 +203,29 @@ impl Lower {
     }
 
     fn item(&mut self, n: &SyntaxNode, out: &mut Vec<Item>) {
+        // `` vba`…` ``: VBA for the module, verbatim.
+        if n.kind() == EXPR_STMT {
+            if let Some(raw) = self.raw_vba(n) {
+                out.push(Item::RawVba(raw));
+                return;
+            }
+        }
         match n.kind() {
             IMPORT_DECL => out.push(Item::Import(self.import(n))),
             FN_DECL => out.push(Item::Fn(self.fn_decl(n))),
+            ACCESSOR_DECL => {
+                let func = self.fn_decl(n);
+                out.push(Item::Accessor(AccessorDecl {
+                    kind: accessor_kind(n),
+                    vis: if func.exported {
+                        Visibility::Public
+                    } else {
+                        Visibility::Private
+                    },
+                    is_static: false,
+                    func,
+                }))
+            }
             CLASS_DECL => out.push(Item::Class(self.class_decl(n))),
             INTERFACE_DECL => out.push(Item::Interface(self.interface_decl(n))),
             ENUM_DECL => out.push(Item::Enum(self.enum_decl(n))),
@@ -496,20 +525,15 @@ impl Lower {
                     members.push(ClassMember::Method(MethodDecl {
                         vis,
                         is_static,
+                        is_event: has_word(&m, "event"),
                         func: self.fn_decl(&m),
                     }));
                 }
                 CTOR_DECL => members.push(ClassMember::Ctor(self.fn_decl(&m))),
                 ACCESSOR_DECL => {
                     let (vis, is_static, _) = self.member_modifiers(&m);
-                    // The accessor keyword is the last bare identifier before the NAME node.
-                    let kind = if sig_tokens(&m).any(|t| t.kind() == IDENT && t.text() == "set") {
-                        AccessorKind::Set
-                    } else {
-                        AccessorKind::Get
-                    };
                     members.push(ClassMember::Accessor(AccessorDecl {
-                        kind,
+                        kind: accessor_kind(&m),
                         vis,
                         is_static,
                         func: self.fn_decl(&m),
@@ -1404,10 +1428,22 @@ impl Lower {
             TAGGED_TEMPLATE => self.tagged_template(n, span),
             INDEX_EXPR => {
                 let subs = self.sub_exprs(n);
-                ExprKind::Index {
-                    object: self.boxed(&subs, 0, span),
-                    index: self.boxed(&subs, 1, span),
-                }
+                let object = self.boxed(&subs, 0, span);
+                let index = if subs.len() > 2 {
+                    // `v[i, j]`: the subscripts become one `Subscripts` (spec §4.6).
+                    let all = subs[1]
+                        .text_range()
+                        .cover(subs[subs.len() - 1].text_range());
+                    let list = subs[1..].iter().map(|s| self.expr(s)).collect();
+                    Box::new(Expr {
+                        id: self.id(),
+                        kind: ExprKind::Subscripts(list),
+                        span: all,
+                    })
+                } else {
+                    self.boxed(&subs, 1, span)
+                };
+                ExprKind::Index { object, index }
             }
             FROM_END_EXPR => {
                 let subs = self.sub_exprs(n);
@@ -1530,20 +1566,10 @@ impl Lower {
             }
             if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
                 // find the matching brace
-                let mut depth = 1;
-                let mut j = i + 2;
-                while j < bytes.len() && depth > 0 {
-                    match bytes[j] {
-                        b'{' => depth += 1,
-                        b'}' => depth -= 1,
-                        _ => {}
-                    }
-                    j += 1;
-                }
-                if depth != 0 {
+                let Some(j) = crate::kind::template_expr_end(bytes, i + 2) else {
                     self.err(span, "テンプレート文字列の `${` が閉じられていません");
                     break;
-                }
+                };
                 if !chunk.is_empty() {
                     parts.push(TemplatePart::Str(unescape(&chunk)));
                     chunk.clear();
@@ -1562,6 +1588,25 @@ impl Lower {
             parts.push(TemplatePart::Str(unescape(&chunk)));
         }
         ExprKind::Template(parts)
+    }
+
+    /// The block of a statement `` vba`…` `` (the tag `vba` followed by a template literal).
+    fn raw_vba(&mut self, stmt: &SyntaxNode) -> Option<RawVba> {
+        let tagged = stmt.children().find(|c| c.kind() == TAGGED_TEMPLATE)?;
+        let mut tokens = tagged
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| !t.kind().is_trivia());
+        let tag = tokens.next()?;
+        let template = tokens.next()?;
+        if tag.text() != RAW_VBA_TAG || template.kind() != TEMPLATE_LIT || tokens.next().is_some() {
+            return None;
+        }
+        let text = template.text();
+        Some(RawVba {
+            text: text[1..text.len() - 1].to_string(),
+            span: self.nspan(&tagged),
+        })
     }
 
     /// `` fx`formula` `` is `evaluate("formula")`, and `` obj.fx`formula` `` is
@@ -1622,6 +1667,9 @@ impl Lower {
         expr
     }
 }
+
+/// The tag of a block of verbatim VBA at the top level (`` vba`…` ``, spec §14.7.4).
+pub const RAW_VBA_TAG: &str = "vba";
 
 /// The tag of the formula sugar `` fx`SUM(A1:A3)` `` (spec §2.7).
 pub const FORMULA_TAG: &str = "fx";

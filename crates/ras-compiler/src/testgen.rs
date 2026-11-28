@@ -48,6 +48,7 @@ pub fn can_generate(prog: &Program, f: FnId) -> bool {
         && !md.is_test()
         && md.rel_path.starts_with("src/")
         && d.kind == FnKind::Free
+        && d.accessor.is_none()
         && d.exported
         && d.decl.as_ref().is_some_and(|x| x.body.is_some())
         && d.attrs.on_events.is_empty()

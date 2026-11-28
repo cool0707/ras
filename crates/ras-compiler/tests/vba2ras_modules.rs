@@ -157,18 +157,21 @@ fn peers() -> Vec<Peer> {
             key: "Module1".into(),
             document: false,
             names: public_names(MODULE1, &Target::Standard),
+            form: false,
         },
         Peer {
             vba_name: "Module2".into(),
             key: "Module2".into(),
             document: false,
             names: public_names(MODULE2, &Target::Standard),
+            form: false,
         },
         Peer {
             vba_name: "Sheet1".into(),
             key: "Sheet1".into(),
             document: true,
             names: public_names(SHEET1, &SHEET1_TARGET),
+            form: false,
         },
     ]
 }
@@ -186,6 +189,16 @@ fn public_names_of_a_module() {
         .map(|n| n.ras)
         .collect();
     assert_eq!(sheet, ["ClearMarks"]);
+}
+
+/// A line that starts with a non-ASCII character is not mistaken for (or cut as) a `Rem` line.
+#[test]
+fn a_line_that_starts_with_a_non_ascii_name_converts() {
+    let vba = "Sub Report()\n    Dim 長さ As Long\n    長さ = 3\n    Rem 終わり\nEnd Sub\n";
+    let c = convert(vba, &Target::Standard, &peers());
+    assert!(c.todos.is_empty(), "{:?}", c.todos);
+    assert!(c.text.contains("長さ = 3;"), "{}", c.text);
+    assert!(c.text.contains("// 終わり"), "{}", c.text);
 }
 
 #[test]
@@ -611,4 +624,179 @@ fn bracket_evaluate_becomes_fx() {
         "{vba}"
     );
     assert!(vba.contains(r#"Evaluate("COUNTIF(A:A,""`x`"")")"#), "{vba}");
+}
+
+const CLASS_MODULE: &str = r#"Option Explicit
+
+Public Name As String
+Private Items_ As Object
+Private Counts_() As Long
+
+Private Sub Class_Initialize()
+    Set Items_ = CreateObject("Scripting.Dictionary")
+End Sub
+
+Public Property Get Count() As Long
+    Count = Items_.Count
+End Property
+
+Public Property Get Item(ByVal Key As String) As Variant
+    Item = Items_(Key)
+End Property
+
+Public Property Let Item(ByVal Key As String, ByVal Value As Variant)
+    Items_(Key) = Value
+End Property
+
+Public Function Describe() As String
+    Describe = Name & ": " & Suffix()
+End Function
+
+Private Function Suffix() As String
+    If Name Like "1*" Then Suffix = "!"
+End Function
+"#;
+
+/// A class module becomes a class: fields, accessors (with parameters), the constructor.
+#[test]
+fn a_class_module_converts_to_a_class() {
+    let target = Target::Class { name: "Basket" };
+    let class = Peer {
+        vba_name: "Basket".into(),
+        key: "Basket".into(),
+        document: false,
+        names: public_names(CLASS_MODULE, &target),
+        form: false,
+    };
+    assert!(class.names[0].class && class.names[0].members.contains(&"Describe()".to_string()));
+    let c = convert(CLASS_MODULE, &target, std::slice::from_ref(&class));
+    println!("{}", c.text);
+    assert!(c.todos.is_empty(), "{:?}", c.todos);
+    for want in [
+        "export class Basket {",
+        "    Name: string;",
+        "    private Items_: object;",
+        "    private Counts_: int[] = [];",
+        "    constructor() {",
+        "    get Count(): int {",
+        "    get Item(Key: string): any {",
+        "    set Item(Key: string, Value: any) {",
+        "        this.Items_[Key] = Value;",
+        "    private Suffix(): string {",
+        "like(",
+    ] {
+        assert!(c.text.contains(want), "{want}:\n{}", c.text);
+    }
+    // A module that uses the class: its type is imported, its members keep their names.
+    let user = convert(
+        "Sub Fill()\n    Dim b As Basket\n    Set b = New Basket\n    b.Item(\"a\") = 1\n    Debug.Print b.Describe\nEnd Sub\n",
+        &Target::Standard,
+        std::slice::from_ref(&class),
+    );
+    println!("{}", user.text);
+    assert!(
+        user.text.contains("import { Basket } from \"src/Basket\";"),
+        "{}",
+        user.text
+    );
+    assert!(user.text.contains("b = new Basket();"), "{}", user.text);
+    assert!(user.text.contains("b.Item(\"a\") = 1;"), "{}", user.text);
+    let (diags, files) = compile(&[("Basket", &c.text), ("Main", &user.text)]);
+    assert!(diags.is_empty(), "{diags:?}");
+    let class = code(&files, "Basket");
+    assert!(
+        class.contains("Public Property Let Item(ByVal Key As String, "),
+        "{class}"
+    );
+}
+
+const API_MODULE: &str = r#"Option Explicit
+
+Private Declare PtrSafe Function GetTickCount Lib "kernel32" () As Long
+
+Public Enum Level
+    lvLow = 1
+    lvHigh
+End Enum
+
+Public Function Elapsed(ByVal since As Long) As Long
+    Elapsed = GetTickCount() - since
+End Function
+
+Public Function Pick(ByVal n As Long) As Level
+    If n > 1 Then GoTo High
+    Pick = lvLow
+    Exit Function
+High:
+    Pick = lvHigh
+    GoTo High2
+High2:
+End Function
+
+Public Sub Back()
+Again:
+    If Elapsed(0) < 0 Then GoTo Again
+    Debug.Print Level.lvHigh, lvLow
+End Sub
+"#;
+
+/// The take-over keeps as VBA what RAS cannot express (spec §14.7.4): a `Declare`, the
+/// procedure that calls it, a procedure with a backward `GoTo`.
+#[test]
+fn what_ras_cannot_express_stays_vba() {
+    let m = ras_compiler::vba2ras::convert_keeping(API_MODULE, &Target::Standard, &[], &[]);
+    println!("{}", m.text);
+    assert!(m.todos.is_empty(), "{:?}", m.todos);
+    assert_eq!(m.raw, ["Elapsed", "Back"]);
+    for want in [
+        "vba`\nPrivate Declare PtrSafe Function GetTickCount Lib \"kernel32\" () As Long\n`;",
+        "declare function GetTickCount(): int;",
+        "export declare function Elapsed(since: int): int;",
+        "export declare function Back(): void;",
+        // The names of the project, as the generated VBA spells them.
+        "    Debug.Print Level_lvHigh, Level_lvLow",
+        // A forward jump is a block.
+        "toHigh: do {",
+    ] {
+        assert!(m.text.contains(want), "{want}:\n{}", m.text);
+    }
+    let (diags, files) = compile(&[("Api", &m.text)]);
+    assert!(diags.is_empty(), "{diags:?}");
+    let api = code(&files, "Api");
+    assert!(
+        api.contains("Private Declare PtrSafe Function GetTickCount"),
+        "{api}"
+    );
+    assert!(
+        api.contains("    If Elapsed(0) < 0 Then GoTo Again"),
+        "{api}"
+    );
+    // Without the fallback (`ras form pull`) they are TODO comments.
+    let plain = convert(API_MODULE, &Target::Standard, &[]);
+    assert!(
+        plain.raw.is_empty() && !plain.todos.is_empty(),
+        "{:?}",
+        plain.todos
+    );
+}
+
+/// A class with events of its own (spec §12.2.2), a `WithEvents` field, and the `Not Not a`
+/// test of an array that has been dimensioned.
+#[test]
+fn a_class_with_events_converts() {
+    let vba = "Option Explicit\n\nPublic Event Changed(ByVal Index As Long, ByRef Cell As Range)\n\nPrivate WithEvents Sheet_ As Worksheet\nPrivate Cache_() As Variant\n\nPublic Sub Flush()\n    If Not Not Cache_ Then Erase Cache_\n    If (Not Cache_) = -1 Then Debug.Print \"empty\"\nEnd Sub\n\nPrivate Sub Sheet__Change(ByVal Target As Range)\n    RaiseEvent Changed(Target.Row, Target)\nEnd Sub\n";
+    let c = convert(vba, &Target::Class { name: "Helper" }, &[]);
+    println!("{}", c.text);
+    assert!(c.todos.is_empty(), "{:?}", c.todos);
+    for want in [
+        "    event Changed(Index: int, Cell: Excel.Range);",
+        "    private Sheet_: Excel.Worksheet;",
+        "        if (isAllocated(this.Cache_)) {",
+        "        if (((isAllocated(this.Cache_) ? 1 : -1)) == -1) {",
+        "    @on(\"Sheet_.Change\")",
+        "    private sheet_Change(Target: Excel.Range) {",
+        "        this.Changed(Target.row, Target);",
+    ] {
+        assert!(c.text.contains(want), "missing `{want}` in\n{}", c.text);
+    }
 }

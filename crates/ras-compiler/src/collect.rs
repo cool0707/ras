@@ -154,6 +154,7 @@ pub fn collect(inputs: Vec<SourceInput>, config: Config) -> Program {
         }
     }
     c.resolve_signatures();
+    c.add_form_vars();
     c.check_document_names();
     c.prog.cur_namespace = None;
     for m in 0..c.prog.modules.len() {
@@ -325,7 +326,20 @@ impl Collector {
                     .map(|c| c.vba_module.to_string())
                     .unwrap_or_default()
             }
-            None => vba_module_name(&input.key),
+            None => {
+                // `Equipment.ras` that declares `class Equipment`: the class module takes the
+                // name, the standard module of the file is `Equipment_`.
+                let name = vba_module_name(&input.key);
+                let lower = name.to_lowercase();
+                let declares_class = parse.ast.items.iter().any(|item| {
+                    matches!(item, ast::Item::Class(c) if c.name.text.to_lowercase() == lower)
+                });
+                if declares_class && input.kind == ModuleKind::User {
+                    format!("{name}_")
+                } else {
+                    name
+                }
+            }
         };
         self.prog.modules.push(ModuleData {
             id,
@@ -348,6 +362,7 @@ impl Collector {
             structs: Vec::new(),
             vars: Vec::new(),
             imports: Vec::new(),
+            raw_vba: Vec::new(),
             line_starts,
             form: form.map(|f| f.1),
         });
@@ -445,6 +460,42 @@ impl Collector {
         }
     }
 
+    /// Registers a module-level accessor: the getter and the setter of a property share its
+    /// name, which stands for the one declared first (`Program::accessor_pair` finds the other).
+    fn register_accessor(
+        &mut self,
+        m: ModuleId,
+        target: &Target,
+        name: &ast::Ident,
+        id: FnId,
+        exported: bool,
+    ) {
+        let kind = self.prog.fns[id].accessor;
+        let other = match self.prog.modules[m].scope.get(&name.text) {
+            Some(Sym::Fn(g)) => Some(*g),
+            _ => None,
+        };
+        let pairs = other.is_some_and(|g| {
+            let o = &self.prog.fns[g];
+            o.module == m && o.accessor.is_some() && o.accessor != kind
+        });
+        let twice = self.prog.modules[m].fns.iter().any(|&g| {
+            let o = &self.prog.fns[g];
+            g != id && o.name == name.text && o.accessor == kind
+        });
+        if !pairs || twice {
+            self.register(m, target, name, Sym::Fn(id), exported);
+            return;
+        }
+        // Exported alone (`get` private, `export set`): the name is exported with this one.
+        if exported {
+            self.prog.modules[m]
+                .exports
+                .entry(name.text.clone())
+                .or_insert(Sym::Fn(id));
+        }
+    }
+
     /// What a form's code-behind cannot contain: it is the code module of the form (an object
     /// module), not a standard module (spec §14.11.2). The same holds for the file of a sheet or
     /// of `ThisWorkbook` (spec §12.2).
@@ -459,6 +510,15 @@ impl Collector {
                 Item::Interface(i) => (i.name.span, "インターフェイス"),
                 Item::Struct(s) => (s.name.span, "構造体"),
                 Item::DeclareModule(d) => (d.span, "`declare module`"),
+                // A form's `export let` is a `Public` variable of the form (see `add_form_vars`).
+                Item::Var(v)
+                    if v.exported && kind == ObjectKind::Form && v.kind == ast::VarKind::Let =>
+                {
+                    continue
+                }
+                Item::Var(v) if v.exported && kind == ObjectKind::Form => {
+                    (v.name.span, "`export` した定数")
+                }
                 Item::Var(v) if v.exported => (v.name.span, "`export` した変数"),
                 Item::Enum(e) if e.exported => (e.name.span, "`export` した列挙型"),
                 Item::TypeAlias(a) if a.exported => (a.name.span, "`export` した型エイリアス"),
@@ -473,6 +533,55 @@ impl Collector {
                     "シートのファイル"
                 };
                 self.err(m, span, "E0650", format!("{file}には{what}を書けません（VBA のドキュメントモジュールに置けないためです。関数・変数・定数・列挙型だけを書けます。共有するものは src/ のモジュールに置いてください）"));
+            }
+        }
+    }
+
+    /// `export let` of a form's code-behind: a `Public` variable of the form's module, which
+    /// other modules read and write as a member of the form (`frmWork.cancelled`, `f.cancelled`;
+    /// spec §14.11.2). The member is a field of the form's type; a type left to be inferred
+    /// (`Void`) is filled in by the checker.
+    fn add_form_vars(&mut self) {
+        for m in 0..self.prog.modules.len() {
+            let Some(class) = self.prog.modules[m]
+                .form
+                .as_ref()
+                .filter(|f| f.kind == ObjectKind::Form)
+                .and_then(|f| f.class)
+            else {
+                continue;
+            };
+            for v in self.prog.modules[m].vars.clone() {
+                let d = self.prog.vars[v].clone();
+                if !d.exported || d.declared || d.is_const {
+                    continue;
+                }
+                let taken = self.prog.classes[class]
+                    .fields
+                    .iter()
+                    .any(|f| f.name.eq_ignore_ascii_case(&d.name))
+                    || self.prog.classes[class]
+                        .methods
+                        .iter()
+                        .any(|&f| self.prog.fns[f].name.eq_ignore_ascii_case(&d.name));
+                if taken {
+                    self.err(m, d.name_span, "E0101", format!("`{}` はフォームのコントロールか公開する関数と同じ名前です（`export` する変数には別の名前を付けてください）", d.name));
+                    continue;
+                }
+                // Written from outside the module, which the checker of this module does not see.
+                self.prog.vars[v].reassigned = true;
+                let ident = crate::names::module_ident(&d.name);
+                self.prog.classes[class].fields.push(FieldDef {
+                    host_name: (ident != d.name).then_some(ident),
+                    name: d.name,
+                    ty: d.ty,
+                    vis: Visibility::Public,
+                    is_static: false,
+                    readonly: false,
+                    init: None,
+                    doc: d.doc,
+                    span: d.name_span,
+                });
             }
         }
     }
@@ -570,7 +679,11 @@ impl Collector {
                 .iter()
                 .copied()
                 .filter(|&f| {
-                    self.prog.fns[f].exported && matches!(self.prog.fns[f].kind, FnKind::Free)
+                    self.prog.fns[f].exported
+                        && matches!(
+                            self.prog.fns[f].kind,
+                            FnKind::Free | FnKind::Host { class: None }
+                        )
                 })
                 .collect();
             self.prog.classes[id].methods = exported;
@@ -739,7 +852,14 @@ impl Collector {
             .fns
             .iter()
             .copied()
-            .filter(|&f| self.prog.fns[f].exported && matches!(self.prog.fns[f].kind, FnKind::Free))
+            .filter(|&f| {
+                // (A `declare function` of the file is a procedure of a `vba` block, spec §14.7.4.)
+                self.prog.fns[f].exported
+                    && matches!(
+                        self.prog.fns[f].kind,
+                        FnKind::Free | FnKind::Host { class: None }
+                    )
+            })
             .collect();
         self.prog.classes[id].methods = exported;
         if let Some(f) = self.prog.modules[m].form.as_mut() {
@@ -907,10 +1027,12 @@ impl Collector {
                 other => self.declare_item(m, &target, other, is_typedef),
             }
         }
-        let has_decls = ast
-            .items
-            .iter()
-            .any(|i| matches!(i, Item::Fn(_) | Item::Class(_) | Item::Interface(_)));
+        let has_decls = ast.items.iter().any(|i| {
+            matches!(
+                i,
+                Item::Fn(_) | Item::Accessor(_) | Item::Class(_) | Item::Interface(_)
+            )
+        });
         let only_vars = !has_decls
             && ast
                 .items
@@ -1045,6 +1167,7 @@ impl Collector {
             inline: decl.inline,
             type_params: Vec::new(),
             params: Vec::new(),
+            accessor: None,
             is_extension: decl.params.first().is_some_and(|p| p.is_this),
             ret: None,
             attrs: FnAttrs::default(),
@@ -1117,6 +1240,26 @@ impl Collector {
                 let reg_name = self.host_ident(m, target, &f.name);
                 self.register(m, target, &reg_name, Sym::Fn(id), f.exported);
             }
+            Item::Accessor(a) => {
+                let f = &a.func;
+                // A property of a type definition is `name: T`; one with parameters `name(i): T`.
+                if is_typedef || !matches!(target, Target::Module(_)) {
+                    self.err(m, f.name.span, "E0155", "型定義にアクセサー（`get` / `set`）は書けません（プロパティは `name: T`、引数のあるプロパティは `name(index: K): T` と書きます）");
+                    return;
+                }
+                if f.body.is_none() {
+                    self.err(m, f.name.span, "E0105", "アクセサーの本体がありません");
+                }
+                let id = self.alloc_fn(
+                    m,
+                    Rc::new(f.clone()),
+                    FnKind::Free,
+                    None,
+                    Visibility::Public,
+                );
+                self.prog.fns[id].accessor = Some(a.kind);
+                self.register_accessor(m, target, &f.name, id, f.exported);
+            }
             Item::Class(c) => {
                 let id = self.alloc_class(
                     m,
@@ -1151,6 +1294,7 @@ impl Collector {
                             };
                             let f =
                                 self.alloc_fn(m, Rc::new(md.func.clone()), kind, Some(id), md.vis);
+                            self.prog.fns[f].attrs.event = md.is_event;
                             self.prog.classes[id].methods.push(f);
                         }
                         ast::ClassMember::Ctor(f) => {
@@ -1409,6 +1553,26 @@ impl Collector {
                 self.cur_ns = saved;
             }
             Item::Import(_) | Item::Var(_) | Item::Stmt(_) => {}
+            // VBA written into the module as it is (spec §14.7.4).
+            Item::RawVba(raw) => {
+                if is_typedef {
+                    self.err(
+                        m,
+                        raw.span,
+                        "E0109",
+                        "`vba` のブロックは型定義ファイル（.d.ras）には書けません",
+                    );
+                } else if raw.text.contains('`') {
+                    self.err(
+                        m,
+                        raw.span,
+                        "E0109",
+                        "`vba` のブロックに `` ` `` は書けません",
+                    );
+                } else {
+                    self.prog.modules[m].raw_vba.push(raw.text.clone());
+                }
+            }
         }
     }
 
@@ -2001,12 +2165,32 @@ impl Collector {
                 );
             }
             if p.rest {
-                self.err(
-                    m,
-                    p.span,
-                    "E0152",
-                    "可変長引数（`...`）には対応していません",
+                // spec §3.5: `...rest: any[]`, the last parameter of a function, method or constructor.
+                let allowed = matches!(
+                    kind,
+                    FnKind::Free
+                        | FnKind::Method { .. }
+                        | FnKind::Ctor { .. }
+                        | FnKind::Host { .. }
                 );
+                let problem = if !allowed {
+                    Some("可変長引数（`...`）は、関数・クラスのメソッド・コンストラクタにだけ書けます")
+                } else if i + 1 != decl.params.len() {
+                    Some("可変長引数（`...`）は最後の引数にだけ書けます")
+                } else if p.is_this {
+                    Some("`this` 引数は可変長引数（`...`）にできません")
+                } else if p.mode == PassMode::ByRef {
+                    Some("可変長引数（`...`）に `byref` は付けられません")
+                } else if p.optional || p.default.is_some() {
+                    Some("可変長引数（`...`）に `?` や既定値は書けません（渡されなければ空の配列になります）")
+                } else if !is_host && ty != Type::Array(Box::new(Type::Any)) && !ty.is_error() {
+                    Some("可変長引数（`...`）の型は `any[]` にしてください")
+                } else {
+                    None
+                };
+                if let Some(msg) = problem {
+                    self.err(m, p.span, "E0152", msg);
+                }
             }
             // VBA can only pass arrays by reference (spec §2.4 example).
             let byref = p.mode == PassMode::ByRef;
@@ -2035,10 +2219,57 @@ impl Collector {
                 local: i,
             });
         }
+        // An event of a class (spec §12.2.2): what VBA's `Event` statement can declare.
+        let is_event = self.prog.fns[id].attrs.event;
+        if is_event {
+            let problem = if decl.body.is_some() {
+                Some("本体は書けません（`event Changed(index: int);` のように宣言だけを書きます）")
+            } else if matches!(
+                kind,
+                FnKind::Method {
+                    is_static: true,
+                    ..
+                }
+            ) {
+                Some("`static` にはできません")
+            } else if !own.is_empty() || !outer.is_empty() {
+                Some("ジェネリックにはできません（ジェネリック クラスにも書けません）")
+            } else if decl
+                .ret
+                .as_ref()
+                .is_some_and(|t| resolve_type(&mut self.prog, m, &scope, t) != Type::Void)
+            {
+                Some("戻り値は書けません")
+            } else if params
+                .iter()
+                .any(|p| p.optional || p.default.is_some() || p.rest)
+            {
+                Some("省略可能な引数や可変長引数は書けません")
+            } else if self.prog.fns[id].vis != Visibility::Public {
+                Some("`private`・`protected` にはできません（受け取る側から見えるように、イベントは公開されます）")
+            } else {
+                None
+            };
+            if let Some(p) = problem {
+                self.err(
+                    m,
+                    decl.name.span,
+                    "E0619",
+                    format!("イベント `{}`: {p}", decl.name.text),
+                );
+            }
+        }
+        // (The value of a setter comes last, after the optional parameters of the property.)
+        let is_setter = self.prog.fns[id].is_setter();
+        let value_param = if is_setter {
+            params.len().checked_sub(1)
+        } else {
+            None
+        };
         let mut seen_optional = false;
-        for (p, a) in params.iter().zip(decl.params.iter()) {
+        for (i, (p, a)) in params.iter().zip(decl.params.iter()).enumerate() {
             let opt = p.optional || p.default.is_some();
-            if seen_optional && !opt {
+            if seen_optional && !opt && !p.rest && Some(i) != value_param {
                 self.err(
                     m,
                     a.name.span,
@@ -2065,6 +2296,7 @@ impl Collector {
             (None, FnKind::Host { .. } | FnKind::Declare { .. } | FnKind::Abstract { .. }) => {
                 Some(Type::Void)
             }
+            (None, _) if is_setter || is_event => Some(Type::Void),
             // Inferred from the body.
             (None, _) => None,
         };
@@ -2111,11 +2343,68 @@ impl Collector {
         f.locals = locals;
         f.ret = ret;
         f.attrs = attrs;
-        if matches!(kind, FnKind::Getter { .. }) && !decl.params.is_empty() {
-            self.err(m, decl.name.span, "E0155", "getter は引数を取れません");
+        f.attrs.event = is_event;
+        if f.accessor_kind().is_some() {
+            // Never expanded at the call site: `x.name(i) = v` has to stay a property.
+            f.inline = InlineMode::NoInline;
+            self.check_accessor_decl(m, &decl, is_setter);
         }
-        if matches!(kind, FnKind::Setter { .. }) && decl.params.len() != 1 {
-            self.err(m, decl.name.span, "E0155", "setter の引数は 1 つです");
+    }
+
+    /// The shape of an accessor (spec §3.6): a getter returns a value; a setter takes the
+    /// assigned value as its last parameter, after those of the getter.
+    fn check_accessor_decl(&mut self, m: ModuleId, decl: &ast::FnDecl, setter: bool) {
+        let span = decl.name.span;
+        if !decl.type_params.is_empty() {
+            self.err(
+                m,
+                span,
+                "E0155",
+                "アクセサーに型パラメーターは付けられません",
+            );
+        }
+        if decl.params.first().is_some_and(|p| p.is_this) {
+            self.err(m, span, "E0155", "アクセサーは拡張メソッドにできません");
+        }
+        if decl.params.iter().any(|p| p.mode == PassMode::ByRef) {
+            self.err(
+                m,
+                span,
+                "E0155",
+                "アクセサーの引数に `byref` は付けられません",
+            );
+        }
+        for d in &decl.decorators {
+            if matches!(
+                d.name.text.as_str(),
+                "macro" | "on" | "init" | "udf" | "ribbon"
+            ) {
+                self.err(
+                    m,
+                    d.span,
+                    "E0155",
+                    format!(
+                        "アクセサーに `@{}` は付けられません（関数に付けてください）",
+                        d.name.text
+                    ),
+                );
+            }
+        }
+        if !setter {
+            return;
+        }
+        match decl.params.last() {
+            None => self.err(m, span, "E0155", "setter には、代入された値を受け取る引数が必要です（`set name(value: T)`。引数のあるプロパティでは最後の引数が値です）"),
+            Some(p) if p.optional || p.default.is_some() => self.err(
+                m,
+                p.name.span,
+                "E0155",
+                "setter の最後の引数（代入された値）は省略可能にできません",
+            ),
+            Some(_) => {}
+        }
+        if decl.ret.is_some() {
+            self.err(m, span, "E0155", "setter に戻り値の型は書けません");
         }
     }
 

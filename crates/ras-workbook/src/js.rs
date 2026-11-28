@@ -81,7 +81,8 @@ pub fn from_json(v: &Json) -> Result<Val> {
             match o.get("$t").and_then(Json::as_str) {
                 Some("date") => Val::Date(n),
                 Some("error") => Val::Err(n as i32),
-                Some("nothing") | None => Val::Empty,
+                // `Null` in a cell is an empty cell, as in Excel.
+                Some("nothing" | "null") | None => Val::Empty,
                 Some(_) => return Err("セルに入れられない値です".into()),
             }
         }

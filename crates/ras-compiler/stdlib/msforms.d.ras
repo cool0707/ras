@@ -355,9 +355,9 @@ declare namespace MSForms {
         RemoveItem(index: any): void;
         /** 項目をすべて削除する。 */
         Clear(): void;
-        /** 項目の値を返す。引数を省略すると全項目を 2 次元配列で返す。 */
+        /** 項目の値を返す。引数を省略すると全項目を 2 次元配列で返す。 @property */
         List(index?: any, column?: any): any;
-        /** 列の値を返す。 */
+        /** 列の値を返す。 @property */
         Column(column?: any, index?: any): any;
         /** 項目の数。 */
         readonly ListCount: int;
@@ -439,7 +439,7 @@ declare namespace MSForms {
     interface ListBox extends ListControl {
         /** 複数の項目を選べるかどうか。 */
         MultiSelect: fmMultiSelect;
-        /** 項目が選択されているかどうか（番号は 0 始まり）。 */
+        /** 項目が選択されているかどうか（番号は 0 始まり）。 @property */
         Selected(index: any): boolean;
         /** 項目の表示方法（チェック ボックスなど）。 */
         ListStyle: fmListStyle;
@@ -747,6 +747,18 @@ declare namespace MSForms {
         Enabled: boolean;
         /** フォント。 */
         readonly Font: StdFont;
+    }
+
+    /**
+     * コントロールの立体表示の種類を表す。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/specialeffect-property
+     */
+    enum fmSpecialEffect {
+        fmSpecialEffectFlat = 0,
+        fmSpecialEffectRaised = 1,
+        fmSpecialEffectSunken = 2,
+        fmSpecialEffectEtched = 3,
+        fmSpecialEffectBump = 6
     }
 
     /** 文字の配置。 */

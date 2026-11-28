@@ -2429,3 +2429,64 @@ describe("FileDialog", () => {
     assert_eq!(code, 0, "{out}{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const RANGE_ARRAYS: &str = r#"export function ranges() {
+    const ws = Sheet1;
+    let n = 0;
+    for (let r = 1; r <= 3; r++) {
+        for (let c = 1; c <= 2; c++) {
+            n++;
+            ws.range("J1").offset(r - 1, c - 1).value = n;
+        }
+    }
+    // The values of several cells: a 1-based array of 2 dimensions, as in VBA.
+    let v: any = Excel.errorToNull(ws.range("J1:K3").value);
+    let s = `${lBound(v)} ${uBound(v)} ${lBound(v, 2)} ${uBound(v, 2)} ${v[3, 1]} ${v[1, 2]}|`;
+    for (const x of v) s += x;
+    v[1, 1] = 9;
+    const w = v;
+    w[1, 1] = 10;
+    s += `|${v[1, 1]}`;
+    // An array made by `redim` is written to a range: 2 dimensions are rows and columns, 1 is a row.
+    let out: any;
+    redim(out, 1, 2, 1, 2);
+    out[1, 1] = "p"; out[1, 2] = "q"; out[2, 1] = "r"; out[2, 2] = "s";
+    ws.range("M1:N2").value = out;
+    let row: any;
+    redim(row, 0, 1);
+    row[0] = "x"; row[1] = "y";
+    ws.range("M4:N4").value = row;
+    s += `|${ws.range("N1").value}${ws.range("M2").value}${ws.range("N4").value}`;
+    redimPreserve(v, 1, 3, 1, 3);
+    s += `|${uBound(v, 2)} ${v[3, 2]} ${v[1, 3] == null}`;
+    // `toArray()` stays the 0-based RAS array.
+    const t = ws.range("J1:K3").toArray();
+    const a: any = Excel.errorToNull(t);
+    s += `|${t[2][0]} ${a[2, 0]} ${lBound(a)}`;
+    debug.print(s);
+    try {
+        debug.print(v[1]);
+    } catch (e) {
+        debug.print("one subscript", e.code);
+    }
+}
+"#;
+
+/// The `value` of several cells is a 1-based array of 2 dimensions for `v[i, j]`, `lBound` /
+/// `uBound`, `for...of` and `redimPreserve`, and arrays made by `redim` are written to ranges
+/// (spec §4.6). The expected output is what the VBA build prints in Excel.
+#[test]
+fn run_range_values_are_vba_arrays() {
+    if !has_node() {
+        return;
+    }
+    let dir = project("arrays", &mut sales(), &[("src/arr.ras", RANGE_ARRAYS)]);
+    let (code, out, err) = ras(&dir, &["run", "Arr.ranges"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("1 3 1 2 5 2|135246|9|qry|3 6 true|5 5 0\n"),
+        "{out}"
+    );
+    assert!(out.contains("one subscript 9\n"), "{out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
