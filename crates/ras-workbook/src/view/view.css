@@ -82,7 +82,7 @@ td.chg { position: relative; outline: 1px solid var(--changed-line); outline-off
 td.chg::before { content: ""; position: absolute; top: 0; right: 0; border: 4px solid; border-color: var(--changed-line) var(--changed-line) transparent transparent; }
 /* The button of a heading of the filter: Excel's square at the cell's bottom right, with the page's chevron (a funnel with it when the column is filtered). */
 td.filter:not(.frz), td.tfilter:not(.frz) { position: relative; }
-td.filter::after, td.tfilter::after { content: ""; position: absolute; right: 1px; bottom: 1px; width: 16px; height: 16px; border: 1px solid #b4b4b4; border-radius: 1px; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M4 5.5l3 3 3-3' fill='none' stroke='%233f3f46' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px 14px no-repeat; pointer-events: none; }
+td.filter::after, td.tfilter::after { content: ""; position: absolute; right: 1px; bottom: 1px; width: 16px; height: 16px; border: 1px solid #c4c4c8; border-radius: 1px; background: #f4f4f5 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M4 5.5l3 3 3-3' fill='none' stroke='%233f3f46' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px 14px no-repeat; pointer-events: none; }
 /* Where rows (columns) are hidden: a double line in the headers, as Excel (the sizes stay). */
 tr.gap th { border-bottom-color: var(--line); box-shadow: inset 0 -1px 0 var(--head), inset 0 -2px 0 var(--line); }
 th.gap { border-right-color: var(--line); box-shadow: inset -1px 0 0 var(--head), inset -2px 0 0 var(--line); }
