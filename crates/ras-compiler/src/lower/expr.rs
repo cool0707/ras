@@ -2618,6 +2618,7 @@ impl<'p> Lowerer<'p> {
             SheetUsedTable => call("RAS_Read2D", vec![self.expr(recv?).member("UsedRange")]),
             RangeToColumn => call("RAS_ToColumn", vec![self.expr(recv?)]),
             RangeToRow => call("RAS_ToRow", vec![self.expr(recv?)]),
+            RangeLastCell => call("RAS_LastCell", vec![self.expr(recv?)]),
             // `ws.range(top, left, bottom, right)` (spec §9.4.2): the sheet is evaluated once.
             SheetRange => {
                 let ws = self.expr(recv?);

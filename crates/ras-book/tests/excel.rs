@@ -1111,6 +1111,8 @@ export function extend() {
     console.log(`${ws.range("A1:D4").extend(-1, -1, -1, -1).address(false, false)} ${r.extend(undefined, 1).address(false, false)} ${r.extend().address(false, false)}`);
     // The cells from (top, left) to (bottom, right) by numbers.
     console.log(`${ws.range(2, 4, 8, 9).address(false, false)} ${dump(ws.range(1, 1, 2, 2))}`);
+    // The bottom-right cell.
+    console.log(`${ws.usedRange.lastCell.address(false, false)} ${ws.range("B3:C3").lastCell.address(false, false)} ${ws.range("A1").lastCell.address(false, false)} ${ws.usedRange.lastCell.row}`);
     // The headings above the data, with the cells read back.
     console.log(`${dump(ws.range("A2:B2").extend(up: 1))}`);
     try {
@@ -1133,6 +1135,7 @@ fn ranges_are_extended_on_each_side() {
             "A2:D4 B3:C5 B2:C3 A3:E3",
             "B2:C3 B3:C4 B3:C3",
             "D2:I8 顧客|担当 / A社|佐藤",
+            "D4 C3 A1 4",
             "顧客|担当 / A社|佐藤",
             "error 1004",
         ]

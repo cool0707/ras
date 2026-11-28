@@ -9,6 +9,7 @@
 > * 名前付き引数 `f(a: 123, c: "あいう")` を追加（§3.3）。エディタで引数名を補完する（§16.2.1）
 > * 上下左右に行・列を足した範囲を返す `range.extend(up, down, left, right)` を追加（§9.4.1）
 > * シートの `range` を行・列の番号 4 つ（`ws.range(2, 4, 8, 9)` = D2:I8）でも呼べるようにした（§9.4.2）
+> * 範囲の右下のセルを返すプロパティ `range.lastCell` を追加（`ws.usedRange.lastCell`。§9.4.3）
 > * VBA の `[A1]`・`[SUM(A1:A10)]`（`Evaluate` の省略形）に当たる `` fx`SUM(A1:A10)` `` を追加（§2.7）。数式の中は Excel の数式として色分けし、ワークシート関数を補完する
 > * ユーザーフォームのデバッグ実行（§14.10.7）と Excel での実行（§14.11.8）を追加
 > * 参照の検索・名前の変更の対象と拒否する名前、セマンティックトークンの種類、未インポートの候補の挿入位置を規定（§16.2.5〜§16.2.7）
@@ -1149,6 +1150,22 @@ Sheet1.range(1, 1, last, 0cE);         // A1:E{last}（列番号リテラル §2
 * **範囲外:** 0 以下や、シートの行数・列数を超える番号は実行時エラー 1004（`Cells` と同じ）。上下・左右が逆でも、2 つのセルを含む範囲になる（`Range(Cell1, Cell2)` と同じ）。
 * **トランスパイル仕様:** `ws.Range(ws.Cells(top, left), ws.Cells(bottom, right))` を出力する。シートの式は 1 回だけ評価する（変数・コード名でなければ一時変数に入れる）。
 * **エディタ:** ホバーと補完の詳細に、もう 1 つの呼び方として `range(top: int, left: int, bottom: int, right: int): Excel.Range` を表示する（パラメーター情報は §16.2）。
+
+
+#### 9.4.3 範囲の右下のセル（`lastCell`）
+
+`range.lastCell: Excel.Range` は、範囲の右下のセル（最後の行・最後の列のセル）を返す読み取り専用のプロパティ。
+
+```typescript
+const last = Sheet1.usedRange.lastCell;           // 使われている範囲の右下のセル
+const lastRow = Sheet1.usedRange.lastCell.row;    // 使われている最後の行
+Sheet1.range("B3:D9").lastCell;                   // D9
+```
+
+* **複数の領域:** 1 つ目の領域の右下のセル（`Rows.Count` / `Columns.Count` と同じく 1 つ目の領域で数える）。1 つのセルなら、そのセル自身。
+* **使い方の誤り:** `()` を付けて呼ぶ（`lastCell()`）と `E0382`、代入すると `E0325`。返したセルのプロパティ（`lastCell.value = 1`）には代入できる。
+* **トランスパイル仕様:** ランタイムの `RAS_LastCell(rng)`（`rng.Cells(rng.Rows.Count, rng.Columns.Count)`）を呼ぶ。範囲の式は 1 回だけ評価する。
+* **エディタ:** 補完・ホバーにプロパティとして表示する。
 
 ---
 

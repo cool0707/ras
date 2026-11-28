@@ -4221,6 +4221,22 @@ impl Checker<'_> {
                 );
                 Type::Any
             }
+            Access::Intrinsic(i) if i.is_property() => {
+                let name = match &c.kind {
+                    ExprKind::Member { name, .. } => name.text.clone(),
+                    ExprKind::Name(id) => id.text.clone(),
+                    _ => String::new(),
+                };
+                self.err(
+                    e.span,
+                    "E0382",
+                    format!("`{name}` はプロパティです。`()` を付けずに使ってください"),
+                );
+                for a in args {
+                    self.expr(a, None);
+                }
+                Type::Error
+            }
             Access::Intrinsic(i) => {
                 self.info().calls.insert(
                     e.id,
@@ -6337,6 +6353,8 @@ impl Checker<'_> {
             // `range.extend(up, down, left, right)`: the rows and columns added on each side
             // (spec §9.4). Omitted (`undefined`) arguments are 0.
             SheetRange => recv.cloned().unwrap_or(Type::Error),
+            // `range.lastCell`: the bottom-right cell (spec §9.4.3).
+            RangeLastCell => recv.cloned().unwrap_or(Type::Error),
             RangeExtend => {
                 if self.arg_count(call, args, 0, 4) {
                     for a in args {

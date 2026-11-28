@@ -35,7 +35,7 @@ intrinsics! {
     // platform
     PlatformIs64, PlatformIsVba7,
     // Range helpers (spec §9.4)
-    FormShowModal, FormClose, RangeToArray, RangeFromArray, RangeToColumn, RangeToRow, RangeExtend, SheetRange, SheetUsedTable, ExcelMatch,
+    FormShowModal, FormClose, RangeToArray, RangeFromArray, RangeToColumn, RangeToRow, RangeExtend, RangeLastCell, SheetRange, SheetUsedTable, ExcelMatch,
     ExcelErrorToNull,
     // event handlers attached at run time (spec §12.2.3)
     EventOn,
@@ -394,6 +394,7 @@ pub fn host_member(prog: &Program, recv: &Type, name: &str) -> Option<Intr> {
         ("Range", "toColumn") => Some(Intr::RangeToColumn),
         ("Range", "toRow") => Some(Intr::RangeToRow),
         ("Range", "extend") => Some(Intr::RangeExtend),
+        ("Range", "lastCell") => Some(Intr::RangeLastCell),
         ("Worksheet", "usedTable") => Some(Intr::SheetUsedTable),
         _ => None,
     }
@@ -438,6 +439,7 @@ impl Intr {
                 | MathPi
                 | PlatformIs64
                 | PlatformIsVba7
+                | RangeLastCell
         )
     }
 

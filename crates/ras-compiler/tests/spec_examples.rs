@@ -734,6 +734,31 @@ export function f(n: int): Excel.Range {
 }
 
 #[test]
+fn spec_9_4_3_last_cell() {
+    let src = r#"
+export function f(ws: Excel.Worksheet): int {
+    const c = ws.usedRange.lastCell;
+    ws.range("A1:C3").lastCell.value = 1;
+    return ws.usedRange.lastCell.row + c.column;
+}
+"#;
+    let (_, out) = compile(&[("m", src)]);
+    let m = code(&out, "M");
+    assert_contains(&m, "Set c = RAS_LastCell(ws.UsedRange)\n");
+    assert_contains(&m, "RAS_LastCell(ws.Range(\"A1:C3\")).Value = 1&\n");
+    assert_contains(&m, "f = RAS_LastCell(ws.UsedRange).Row + c.Column\n");
+    assert_contains(
+        &code(&out, "RAS_Runtime"),
+        "    Set RAS_LastCell = rng.Cells(rng.Rows.Count, rng.Columns.Count)\n",
+    );
+    let errs = error_codes(&[(
+        "m",
+        "function g(ws: Excel.Worksheet) { const x = ws.usedRange.lastCell(); ws.usedRange.lastCell = ws.range(\"A1\"); }\n",
+    )]);
+    assert_eq!(errs.len(), 2, "{errs:?}");
+}
+
+#[test]
 fn spec_10_3_fast_macro_entry() {
     let (_, out) = compile(&[(
         "report",

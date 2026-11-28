@@ -1402,6 +1402,7 @@ impl<'p> Gen<'p> {
             RangeToColumn => format!("$rt.toColumn({r})"),
             RangeToRow => format!("$rt.toRow({r})"),
             SheetRange => format!("$rt.sheetRange({r}, {argv})"),
+            RangeLastCell => format!("$rt.lastCell({r})"),
             RangeExtend => {
                 let side = |i: usize| match args.get(i) {
                     Some(x) if !matches!(x.kind, ExprKind::Undefined) => a[i].clone(),

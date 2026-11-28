@@ -188,10 +188,15 @@ pub struct BuiltinSig {
     pub doc: &'static str,
     /// Whether the parameters can be given by name (spec §3.3).
     pub named: bool,
+    /// A property: read without `()` (no parameters).
+    pub property: bool,
 }
 
 impl BuiltinSig {
     pub fn label(&self) -> String {
+        if self.property {
+            return format!("{}: {}", self.name, self.ret);
+        }
         let ps: Vec<&str> = self.params.iter().map(|p| p.0).collect();
         format!("{}({}): {}", self.name, ps.join(", "), self.ret)
     }
@@ -209,6 +214,17 @@ pub const RANGE_EXTEND_SIG: BuiltinSig = BuiltinSig {
     ret: "Excel.Range",
     doc: "範囲の上・下・左・右に行・列を足した範囲を返す（元の範囲は変えない）。名前付き引数でも書ける。シートの端を越える・大きさが 0 以下になると実行時エラー 1004。\n\n例: `range(\"B3:C3\").extend(down: 2)` → B3:C5、`extend(1, 1, 1, 1)` → A2:D4",
     named: true,
+    property: false,
+};
+
+/// `range.lastCell` (spec §9.4.3).
+pub const RANGE_LAST_CELL_SIG: BuiltinSig = BuiltinSig {
+    name: "lastCell",
+    params: &[],
+    ret: "Excel.Range",
+    doc: "範囲の右下のセル（最後の行・最後の列のセル）を返す（RAS の拡張。読み取り専用）。複数の領域があるときは 1 つ目の領域の右下。\n\n例: `ws.usedRange.lastCell.row` → 使われている最後の行、`range(\"B3:D9\").lastCell` → D9",
+    named: false,
+    property: true,
 };
 
 /// `ws.range(top, left, bottom, right)` (spec §9.4.2).
@@ -223,12 +239,14 @@ pub const SHEET_RANGE_SIG: BuiltinSig = BuiltinSig {
     ret: "Excel.Range",
     doc: "(top, left) のセルから (bottom, right) のセルまでの範囲を返す（RAS の拡張。VBA では `Range(Cells(top, left), Cells(bottom, right))`）。\n\n例: `Sheet1.range(2, 4, 8, 9)` → D2:I8",
     named: false,
+    property: false,
 };
 
 /// The signature of an intrinsic member, when it has one to show.
 fn intrinsic_sig(i: intrinsics::Intr) -> Option<&'static BuiltinSig> {
     match i {
         intrinsics::Intr::RangeExtend => Some(&RANGE_EXTEND_SIG),
+        intrinsics::Intr::RangeLastCell => Some(&RANGE_LAST_CELL_SIG),
         _ => None,
     }
 }
@@ -410,7 +428,13 @@ fn describe_res(prog: &Program, m: ModuleId, offset: u32, res: &Res, ty: &Type) 
         Res::Namespace(n) => code_block(&format!("namespace {n}"), None),
         Res::Builtin(n) => code_block(&format!("(組み込み) {n}"), None),
         Res::Intrinsic(i) => match intrinsic_sig(*i) {
-            Some(sig) => builtin_hover(sig, Some("RAS_RangeExtend(…)")),
+            Some(sig) => builtin_hover(
+                sig,
+                Some(match i {
+                    intrinsics::Intr::RangeLastCell => "RAS_LastCell(…)",
+                    _ => "RAS_RangeExtend(…)",
+                }),
+            ),
             None => code_block(&format!("(組み込み): {}", prog.show(ty)), None),
         },
         Res::Dynamic => code_block(
@@ -676,7 +700,12 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
     };
     let builtin_sig = |sig: &BuiltinSig, out: &mut Vec<Completion>| {
         let doc = sig.doc.to_string();
-        out.push(item(sig.name, kind::METHOD, sig.label(), Some(&doc), 0));
+        let k = if sig.property {
+            kind::PROPERTY
+        } else {
+            kind::METHOD
+        };
+        out.push(item(sig.name, k, sig.label(), Some(&doc), 0));
     };
     match ty {
         // The members every member type of the union has.
@@ -697,6 +726,7 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
                     "Range" => {
                         builtin(&["toArray", "fromArray", "toColumn", "toRow"], &mut out);
                         builtin_sig(&RANGE_EXTEND_SIG, &mut out);
+                        builtin_sig(&RANGE_LAST_CELL_SIG, &mut out);
                     }
                     "Worksheet" => builtin(&["usedTable"], &mut out),
                     _ => {}

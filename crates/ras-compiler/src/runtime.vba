@@ -863,6 +863,11 @@ Public Function RAS_ToRow(ByVal rng As Object) As Variant
     Next i
     RAS_ToRow = out
 End Function
+'@@ proc RAS_LastCell
+' The bottom-right cell of a Range (of its first area; spec 9.4.3).
+Public Function RAS_LastCell(ByVal rng As Object) As Object
+    Set RAS_LastCell = rng.Cells(rng.Rows.Count, rng.Columns.Count)
+End Function
 '@@ proc RAS_RangeExtend
 ' The Range with up/down rows and left/right columns added on each side (spec 9.4).
 ' Negative counts shrink it. Past the edge of the sheet or down to no cells: error 1004.

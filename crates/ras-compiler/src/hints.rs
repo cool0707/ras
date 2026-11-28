@@ -507,9 +507,15 @@ impl<'a> Visit<'a> for Tokens<'_> {
             Some(Res::Namespace(_) | Res::Builtin(_)) => {
                 self.push(span, tt::NAMESPACE, tm::DEFAULT_LIBRARY)
             }
-            Some(Res::Intrinsic(_)) => self.push(
+            Some(Res::Intrinsic(i)) => self.push(
                 span,
-                if is_member { tt::METHOD } else { tt::FUNCTION },
+                if i.is_property() {
+                    tt::PROPERTY
+                } else if is_member {
+                    tt::METHOD
+                } else {
+                    tt::FUNCTION
+                },
                 tm::DEFAULT_LIBRARY,
             ),
             Some(Res::Dynamic) if is_member => self.push(span, tt::PROPERTY, 0),

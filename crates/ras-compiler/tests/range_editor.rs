@@ -130,3 +130,22 @@ fn completion_lists_extend_and_its_argument_names() {
         range.detail
     );
 }
+
+#[test]
+fn last_cell_is_shown_as_a_property() {
+    let src = "function g(ws: Excel.Worksheet) { const c = ws.usedRange.lastCell; }\n";
+    let h = hover(src, "usedRange.last");
+    assert!(h.contains("(組み込み) lastCell: Excel.Range"), "{h}");
+    assert!(h.contains("右下のセル"), "{h}");
+    let (prog, m) = analyze_one("function g(r: Excel.Range) {\n    r.\n}\n");
+    let items = query::completions(
+        &prog,
+        m,
+        "function g(r: Excel.Range) {\n    r.".len() as u32,
+    );
+    let c = items
+        .iter()
+        .find(|c| c.label == "lastCell")
+        .expect("lastCell");
+    assert_eq!(c.detail, "lastCell: Excel.Range");
+}
