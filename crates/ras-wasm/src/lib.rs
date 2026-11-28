@@ -2,6 +2,8 @@
 //! the browser, without the `ras` program, Node or Excel.
 //!
 //! - [`compile`]: `ras check` / `ras build` / `ras build --target js` of a project held in memory.
+//! - [`Analysis`]: the completion, hovers and parameter information of the editor (what the
+//!   language server answers, spec §16.2).
 //! - [`format`]: `ras fmt` of one file; [`explain`]: `ras explain <code>`; [`encode_vba`]: the
 //!   bytes of a `.bas` / `.cls` as `ras build` writes them.
 //! - [`Book`]: the workbook of the stand-in for Excel, as the `ras_book` addon gives it to Node
@@ -294,6 +296,128 @@ fn compile_json(input: &str) -> Json {
         "codepage": codepage,
         "error": null,
     })
+}
+
+/// A project analysed for the editor (as the language server keeps one, spec §16.2): what the
+/// completion, the hovers and the parameter information are answered from.
+#[wasm_bindgen]
+pub struct Analysis {
+    prog: ras_compiler::Program,
+}
+
+#[wasm_bindgen]
+impl Analysis {
+    /// Analyses the project `input` (as for [`compile`]), with its tests.
+    #[wasm_bindgen(constructor)]
+    pub fn new(input: &str) -> Result<Analysis, JsError> {
+        let Input {
+            config,
+            mut sources,
+            tests,
+            ..
+        } = read_input(input).map_err(err)?;
+        sources.extend(tests);
+        Ok(Analysis {
+            prog: ras_compiler::analyze(sources, config),
+        })
+    }
+
+    /// The completion at a position of the file `path` (line and column from 0, the column in
+    /// UTF-16 code units). `named_only` offers only the names of the arguments of the call
+    /// (after a `(` or a `,` was typed, spec §3.3).
+    ///
+    /// Returns JSON: `[{ label, kind, detail, doc, sort, insert, range, import }]`. `kind` is an
+    /// LSP `CompletionItemKind`, `doc` Markdown, `sort` the group (smaller first), `insert` the
+    /// text inserted instead of the label, `range` (`{ line, col, endLine, endCol }`) what it
+    /// replaces when that is not the word at the cursor, and `import`
+    /// (`{ line, col, endLine, endCol, text }`) the edit that imports the name.
+    pub fn completions(&self, path: &str, line: u32, col: u32, named_only: bool) -> String {
+        let prog = &self.prog;
+        let Some(m) = prog.modules.iter().position(|md| md.rel_path == path) else {
+            return "[]".to_string();
+        };
+        let md = &prog.modules[m];
+        let offset = md.offset_of(line, col);
+        let list = if named_only {
+            ras_compiler::query::named_arg_completions(prog, m, offset)
+        } else {
+            ras_compiler::query::completions(prog, m, offset)
+        };
+        let range = |span: ras_syntax::TextRange| {
+            let (line, col) = md.line_col_utf16(u32::from(span.start()));
+            let (end_line, end_col) = md.line_col_utf16(u32::from(span.end()));
+            json!({ "line": line, "col": col, "endLine": end_line, "endCol": end_col })
+        };
+        let items: Vec<Json> = list
+            .into_iter()
+            .map(|c| {
+                let mut v = json!({ "label": c.label, "kind": c.kind, "detail": c.detail,
+                    "doc": c.doc, "sort": c.sort, "insert": c.insert });
+                if let Some(span) = c.range {
+                    v["range"] = range(span);
+                }
+                if let Some((span, text)) = c.import {
+                    v["import"] = range(span);
+                    v["import"]["text"] = json!(text);
+                }
+                v
+            })
+            .collect();
+        Json::Array(items).to_string()
+    }
+
+    /// What the name at a position of the file `path` is (positions as for
+    /// [`Analysis::completions`]).
+    ///
+    /// Returns JSON: `{ markdown, line, col, endLine, endCol }` (the description and the range
+    /// of the name), or `null`.
+    pub fn hover(&self, path: &str, line: u32, col: u32) -> String {
+        let prog = &self.prog;
+        let Some(m) = prog.modules.iter().position(|md| md.rel_path == path) else {
+            return "null".to_string();
+        };
+        let md = &prog.modules[m];
+        let Some(h) = ras_compiler::query::hover(prog, m, md.offset_of(line, col)) else {
+            return "null".to_string();
+        };
+        let (start_line, start_col) = md.line_col_utf16(u32::from(h.span.start()));
+        let (end_line, end_col) = md.line_col_utf16(u32::from(h.span.end()));
+        json!({ "markdown": h.markdown, "line": start_line, "col": start_col,
+            "endLine": end_line, "endCol": end_col })
+        .to_string()
+    }
+
+    /// The parameters of the call whose arguments a position of the file `path` is in
+    /// (positions as for [`Analysis::completions`]).
+    ///
+    /// Returns JSON: `{ signatures: [{ label, doc, params: [{ from, to, doc }], active }], active }`,
+    /// or `null`. A signature's `params` are ranges of its label (UTF-16 code units) with the
+    /// `@param` description, its `active` the parameter being written (or `null`); the outer
+    /// `active` is the signature that fits the arguments. The descriptions are Markdown.
+    #[wasm_bindgen(js_name = signatureHelp)]
+    pub fn signature_help(&self, path: &str, line: u32, col: u32) -> String {
+        let prog = &self.prog;
+        let Some(m) = prog.modules.iter().position(|md| md.rel_path == path) else {
+            return "null".to_string();
+        };
+        let offset = prog.modules[m].offset_of(line, col);
+        let Some(h) = ras_compiler::query::signature_help(prog, m, offset) else {
+            return "null".to_string();
+        };
+        let signatures: Vec<Json> = h
+            .signatures
+            .into_iter()
+            .map(|s| {
+                let params: Vec<Json> = s
+                    .params
+                    .iter()
+                    .map(|((from, to), doc)| json!({ "from": from, "to": to, "doc": doc }))
+                    .collect();
+                json!({ "label": s.label, "doc": s.doc, "params": params, "active": s.active })
+            })
+            .collect();
+        json!({ "signatures": signatures, "active": h.active_signature }).to_string()
+    }
 }
 
 /// The skeleton of a test of the function `name` of the module `path` (spec §14.12.10), for its
@@ -949,5 +1073,82 @@ mod tests {
         assert_eq!(d["path"], "src/main.ras");
         assert_eq!(d["line"], 1);
         assert!(out["vba"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn completes_members_names_and_imports() {
+        let input = json!({
+            "files": [
+                { "path": "src/main.ras", "text": "export function hello(名前: string) {\n    let ws = [\"a\"];\n    ws.\n    tw\n    hello(\n}\n" },
+                { "path": "src/util.ras", "text": "/** 2 倍にします。 */\nexport function twice(n: int): int {\n    return n * 2;\n}\n" },
+            ],
+            "toml": "[project]\nname = \"P\"\n",
+        })
+        .to_string();
+        let a = Analysis::new(&input).unwrap_or_else(|_| panic!("analyze"));
+        let at = |line, col, named| -> Vec<Json> {
+            serde_json::from_str(&a.completions("src/main.ras", line, col, named)).unwrap()
+        };
+        // the members of the type of `ws` (the next line begins with a word)
+        let members = at(2, 7, false);
+        assert!(members.iter().any(|c| c["label"] == "map"), "{members:?}");
+        assert!(members.iter().all(|c| c["label"] != "hello"));
+        // the names in scope, and an export of a module that is not imported, with its import
+        let names = at(3, 6, false);
+        assert!(names.iter().any(|c| c["label"] == "名前"));
+        let twice = names.iter().find(|c| c["label"] == "twice").expect("twice");
+        assert_eq!(twice["doc"], "2 倍にします。");
+        assert_eq!(twice["import"]["line"], 0);
+        assert!(
+            twice["import"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("import { twice }"),
+            "{twice}"
+        );
+        // only the names of the arguments after `(`
+        let named = at(4, 10, true);
+        assert_eq!(named.len(), 1, "{named:?}");
+        assert_eq!(named[0]["insert"], "名前: ");
+        // a file that is not of the project
+        assert_eq!(a.completions("src/none.ras", 0, 0, false), "[]");
+    }
+
+    #[test]
+    fn describes_names_and_calls() {
+        let input = json!({
+            "files": [
+                { "path": "src/main.ras", "text": "/**\n * 面積を返します。\n * @param width 幅\n */\nfunction area(width: int, height: int): int {\n    return width * height;\n}\nexport function f() {\n    area(1, \n}\n" },
+            ],
+            "toml": "[project]\nname = \"P\"\n",
+        })
+        .to_string();
+        let a = Analysis::new(&input).unwrap_or_else(|_| panic!("analyze"));
+        let hover: Json = serde_json::from_str(&a.hover("src/main.ras", 8, 5)).unwrap();
+        assert!(
+            hover["markdown"]
+                .as_str()
+                .unwrap()
+                .contains("area(width: int, height: int): int")
+                && hover["markdown"]
+                    .as_str()
+                    .unwrap()
+                    .contains("面積を返します。"),
+            "{hover}"
+        );
+        assert_eq!(
+            (&hover["line"], &hover["col"], &hover["endCol"]),
+            (&json!(8), &json!(4), &json!(8))
+        );
+        assert_eq!(a.hover("src/main.ras", 8, 0), "null");
+        let help: Json = serde_json::from_str(&a.signature_help("src/main.ras", 8, 12)).unwrap();
+        let sig = &help["signatures"][help["active"].as_u64().unwrap() as usize];
+        assert_eq!(sig["label"], "area(width: int, height: int): int");
+        assert_eq!(sig["active"], 1);
+        assert_eq!(
+            sig["params"][0],
+            json!({ "from": 5, "to": 15, "doc": "幅" })
+        );
+        assert_eq!(a.signature_help("src/main.ras", 7, 0), "null");
     }
 }

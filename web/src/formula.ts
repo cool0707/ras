@@ -3,7 +3,7 @@
 // coloured), and completion there offers Excel's functions instead of RAS's names. The functions
 // are those the language server offers (crates/ras-compiler/stdlib/formula_functions.json).
 
-import type { Completion, CompletionContext, CompletionResult } from "@codemirror/autocomplete";
+import type { Completion, CompletionContext, CompletionResult, CompletionSource } from "@codemirror/autocomplete";
 import { LanguageSupport, type LRLanguage, StreamLanguage, type StringStream } from "@codemirror/language";
 import { javascript } from "@codemirror/lang-javascript";
 import { tags } from "@lezer/highlight";
@@ -107,9 +107,10 @@ function isFormula(node: SyntaxNodeRef, text: (from: number, to: number) => stri
     return false;
 }
 
-/** TypeScript (RAS is close enough to it, and keeps its completion and brackets) with the
- * formulas of `fx` templates nested. */
-export function rasLanguage(): LanguageSupport {
+/** TypeScript (RAS is close enough to it for its highlighting and brackets) with the formulas
+ * of `fx` templates nested. `complete` is the completion outside the formulas (the compiler's,
+ * `complete.ts`); without it, TypeScript's. */
+export function rasLanguage(complete?: CompletionSource): LanguageSupport {
     const ts = javascript({ typescript: true });
     const language = (ts.language as LRLanguage).configure({
         wrap: parseMixed((node, input) => {
@@ -127,5 +128,5 @@ export function rasLanguage(): LanguageSupport {
             return overlay.length ? { parser: formulaLanguage.parser, overlay } : null;
         }),
     });
-    return new LanguageSupport(language, ts.support);
+    return new LanguageSupport(language, complete ? language.data.of({ autocomplete: complete }) : ts.support);
 }

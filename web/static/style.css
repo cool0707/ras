@@ -871,3 +871,46 @@ body.splitting iframe {
 .menu-item .ras-icon {
     color: var(--muted);
 }
+
+/* The descriptions of the compiler: of a completion (complete.ts), of a name pointed at and of
+   the call being written (hover.ts). */
+.cm-tooltip.cm-completionInfo {
+    max-width: 420px;
+}
+
+.cm-tooltip .cm-hover,
+.cm-tooltip.cm-signature {
+    max-width: 560px;
+    max-height: 260px;
+    overflow: auto;
+    padding: 4px 8px;
+    font-size: 13px;
+}
+
+.cm-tooltip .doc p {
+    margin: 0 0 6px;
+    white-space: pre-wrap;
+}
+
+.cm-tooltip .doc :last-child {
+    margin-bottom: 0;
+}
+
+.cm-tooltip .doc pre,
+.cm-signature .sig {
+    margin: 0 0 6px;
+    white-space: pre-wrap;
+    font-family: ui-monospace, "Cascadia Code", Consolas, "Menlo", "BIZ UDGothic", monospace;
+}
+
+.cm-signature .sig:not(.active) {
+    color: var(--muted);
+}
+
+.cm-signature .sig strong {
+    color: var(--accent);
+}
+
+.cm-signature .sig:last-child {
+    margin-bottom: 0;
+}
