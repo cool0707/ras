@@ -3234,11 +3234,12 @@ header {
 .color-palette {
   gap: 8px;
 }
+/* The colors to choose from are round (as the sheet view's palette). */
 .property-modal .color-palette-swatch,
 .color-custom-picker {
   width: 28px;
   height: 28px;
-  border-radius: var(--r-sm);
+  border-radius: 50%;
 }
 .color-palette {
   grid-template-columns: repeat(8, 28px);
