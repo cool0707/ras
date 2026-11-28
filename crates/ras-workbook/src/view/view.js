@@ -613,7 +613,8 @@
         const fillbox = marks.appendChild(el("div", "fillbox"));
         const fillh = marks.appendChild(el("div", "fillhandle"));
         // The button of a list (an input rule) and its message, at the active cell.
-        const dropbtn = marks.appendChild(el("div", "dropbtn", "▾"));
+        const dropbtn = marks.appendChild(el("div", "dropbtn"));
+        dropbtn.appendChild(el("span", "chev"));
         const promptbox = marks.appendChild(el("div", "promptbox"));
         // The lines under the rows and right of the columns frozen.
         const frzh = marks.appendChild(el("div", "frzline h"));
@@ -2082,7 +2083,7 @@
         entry.sel = kept;
         const f = { ...cellFont(), ...charFont() };
         const form = openDialog("セルの書式設定", "charfont");
-        form.appendChild(el("div", "tabs1", "フォント"));
+        form.appendChild(el("div", "tabs1 tablist")).appendChild(el("span", "on", "フォント"));
         const name = field(form, "フォント名:");
         name.value = f.name || "";
         name.dataset.field = "fontName";
@@ -4599,8 +4600,10 @@
             }
         });
         const spins = wrap.appendChild(el("span", "spins"));
-        for (const [text, by] of [["▴", step], ["▾", -step]]) {
-            const b = spins.appendChild(el("button", null, text));
+        for (const [cls, by, label] of [["chev up", step, "増やす"], ["chev", -step, "減らす"]]) {
+            const b = spins.appendChild(el("button"));
+            b.appendChild(el("span", cls));
+            b.setAttribute("aria-label", label);
             b.type = "button";
             b.tabIndex = -1;
             b.addEventListener("click", () => take((parseFloat(input.value) || 0) + by));
@@ -4918,7 +4921,7 @@
                     .join(", ")}}`;
                 row.appendChild(el("span", "pv pobj", preview)).title = preview;
                 row.classList.add("pbranch");
-                tw.textContent = "▶";
+                tw.classList.add("chev", "right");
                 row.addEventListener("click", () => {
                     const on = !row.classList.contains("open");
                     if (on) propsOpen.add(key);
@@ -5020,7 +5023,7 @@
                 else sw.classList.add("none");
                 cb.appendChild(el("span", "pctext", none || ""));
             }
-            cb.appendChild(el("span", "pdrop", "▾"));
+            cb.appendChild(el("span", "pdrop chev"));
             cb.addEventListener("click", () => openColors(cb, null, none, set));
             return cb;
         };
@@ -5435,7 +5438,8 @@
                     focusGrid();
                 }
             });
-            const drop = combo.appendChild(el("button", "pdrop", "▾"));
+            const drop = combo.appendChild(el("button", "pdrop"));
+            drop.appendChild(el("span", "chev"));
             drop.type = "button";
             drop.title = "フォントの一覧";
             drop.addEventListener("click", () => openFontList(combo, take, fn.name));
@@ -5808,7 +5812,8 @@
                     focusGrid();
                 }
             });
-            const drop = combo.appendChild(el("button", "pdrop", "▾"));
+            const drop = combo.appendChild(el("button", "pdrop"));
+            drop.appendChild(el("span", "chev"));
             drop.type = "button";
             drop.title = "フォントの一覧";
             drop.addEventListener("click", () => openFontList(combo, take, name));
@@ -5852,7 +5857,7 @@
             pick.dataset.field = "borderLine";
             pick.title = `線のスタイル（${(BORDER_LINES.find((l) => l[0] === borderPen.line) || BORDER_LINES[0])[1]}）`;
             pick.appendChild(el("span", "sample")).innerHTML = lineSample(borderPen.line, 56);
-            pick.appendChild(el("span", "pdrop", "▾"));
+            pick.appendChild(el("span", "pdrop chev"));
             pick.addEventListener("click", () => {
                 const pop = openPop(pick, "linestyles");
                 for (const [key, label] of BORDER_LINES) {
@@ -6004,7 +6009,7 @@
                 sw.classList.add("none");
                 kind.appendChild(el("span", "pctext", "なし"));
             } else sw.style.cssText = fillCss(pattern, fg, bg);
-            kind.appendChild(el("span", "pdrop", "▾"));
+            kind.appendChild(el("span", "pdrop chev"));
             kind.addEventListener("click", () => {
                 const pop = openPop(kind, "patterns");
                 const tiles = pop.appendChild(el("div", "swatches"));
@@ -6178,7 +6183,7 @@
     function askSymbol() {
         if (!editable || busy || !sel || !view || sel.kind !== "cells") return;
         const form = openDialog("記号と特殊文字", "symboldlg");
-        const tabs = form.appendChild(el("div", "symtabs"));
+        const tabs = form.appendChild(el("div", "symtabs tablist"));
         const grid = form.appendChild(el("div", "symgrid"));
         const recent = form.appendChild(el("div", "symrecent"));
         const showRecent = () => {
@@ -7042,7 +7047,7 @@
                     sw.classList.add("none");
                     kind.appendChild(el("span", "pctext", "設定なし"));
                 } else sw.style.cssText = fillCss(pattern, f.patternColor || "#000000", f.fill || "#FFFFFF");
-                kind.appendChild(el("span", "pdrop", "▾"));
+                kind.appendChild(el("span", "pdrop chev"));
                 kind.addEventListener("click", () => {
                     const pop = openPop(kind, "patterns");
                     const tiles = pop.appendChild(el("div", "swatches"));
@@ -7075,7 +7080,7 @@
                 pick.dataset.field = "borderLine";
                 pick.title = `線のスタイル（${(BORDER_LINES.find((l) => l[0] === pen.line) || BORDER_LINES[0])[1]}）`;
                 pick.appendChild(el("span", "sample")).innerHTML = lineSample(pen.line, 56);
-                pick.appendChild(el("span", "pdrop", "▾"));
+                pick.appendChild(el("span", "pdrop chev"));
                 pick.addEventListener("click", () => {
                     const pop = openPop(pick, "linestyles");
                     for (const [key, label] of BORDER_LINES.filter((l) => COND_LINES.includes(l[0]))) {
@@ -7205,9 +7210,7 @@
             return line;
         };
         const colorAfter = (line, value, field) => {
-            const pick = line.appendChild(el("input"));
-            pick.type = "color";
-            pick.value = value.toLowerCase();
+            const pick = line.appendChild(colorInput(value));
             pick.dataset.field = field;
             return pick;
         };
@@ -7227,7 +7230,7 @@
         const fill = choice("負の値のバーの塗りつぶしの色", "negFill", "塗りつぶしの色:", n.negativeFillSame, n.negativeFill, "negativeFill", "正の値のバーと同じ塗りつぶしの色を適用する");
         const border = choice("負の値のバーの枠線の色", "negBorder", "枠線の色:", n.negativeBorderSame, n.negativeBorder, "negativeBorder", "正の値のバーと同じ枠線の色を適用する");
         // (Of a bar with a border only.)
-        if (!bordered) for (const x of border.box.querySelectorAll("input")) x.disabled = true;
+        if (!bordered) for (const x of border.box.querySelectorAll("input, .colorinput")) x.disabled = true;
         const axisBox = group("軸の設定");
         axisBox.appendChild(el("div", "hint", "負の値のバーの外観を変更するには、セルの軸の位置を選択してください:"));
         radio(axisBox, "axis", "automatic", "セルの値に基づく自動調整 (可変の位置に表示)", n.axis === "automatic");
@@ -7287,9 +7290,7 @@
         sync();
         let pick = null;
         if (color) {
-            pick = el("input");
-            pick.type = "color";
-            pick.value = color.toLowerCase();
+            pick = colorInput(color);
             pick.dataset.field = "pointColor";
         }
         const now = () => ({ type: type.value, value: value.value.trim() });
@@ -7324,7 +7325,7 @@
         b.dataset.field = "icons";
         b.setAttribute("aria-haspopup", "listbox");
         const show = () => {
-            b.innerHTML = `${iconsHtml(b.value)}<span class="caret"></span>`;
+            b.innerHTML = `${iconsHtml(b.value)}<span class="chev"></span>`;
             b.title = iconName(b.value);
         };
         b.value = value;
@@ -7769,10 +7770,8 @@
                 for (const h of ["塗りつぶし", "色", "枠線", "色"]) look.appendChild(el("span", "head", h));
                 const fill = condSelect(look, [["gradient", "塗りつぶし (グラデーション)"], ["solid", "塗りつぶし (単色)"]], scaleGiven("dataBar", "solid", false) ? "solid" : "gradient", "barFill");
                 const color = (value, name) => {
-                    const pick = look.appendChild(el("input"));
-                    pick.type = "color";
+                    const pick = look.appendChild(colorInput(value));
                     pick.dataset.field = name;
-                    pick.value = value.toLowerCase();
                     return pick;
                 };
                 const c = color((scaleGiven("dataBar", "colors", null) || ["#638EC6"])[0], "barColor");
@@ -8167,10 +8166,14 @@
             state.changed = true;
             draw();
         };
-        const upBtn = tool("▲", "up", () => move(true));
+        const upBtn = tool("", "up", () => move(true));
         upBtn.title = "上へ移動（優先順位を上げる）";
-        const downBtn = tool("▼", "down", () => move(false));
+        upBtn.className = "iconbtn";
+        upBtn.appendChild(el("span", "chev up"));
+        const downBtn = tool("", "down", () => move(false));
         downBtn.title = "下へ移動（優先順位を下げる）";
+        downBtn.className = "iconbtn";
+        downBtn.appendChild(el("span", "chev"));
         function draw() {
             table.textContent = "";
             const head = table.appendChild(el("div", "condhead"));
@@ -8416,22 +8419,169 @@
                 else useColor(name, color.toUpperCase());
             });
         }
-        // Any other color, as #RRGGBB.
-        const form = pop.appendChild(el("form", "hex"));
-        const input = form.appendChild(el("input"));
-        input.type = "text";
-        input.placeholder = "#RRGGBB";
-        input.maxLength = 7;
-        form.appendChild(el("button", null, "OK")).type = "submit";
-        form.addEventListener("submit", (e) => {
-            e.preventDefault();
-            const m = /^#?([0-9a-f]{6})$/i.exec(input.value.trim());
-            if (!m) return;
+        // Any other color: picked on its square (saturation and brightness) and hue, or typed.
+        const start = (name && lastColor[name]) || "#4472C4";
+        colorPicker(pop, start, (color) => {
             closeMenu();
             focusGrid();
-            if (pick) pick(`#${m[1].toUpperCase()}`);
-            else useColor(name, `#${m[1].toUpperCase()}`);
+            if (pick) pick(color);
+            else useColor(name, color);
         });
+    }
+    // A color picker (as shadcn's): a square of saturation × brightness, a bar of hue, the color as
+    // hex or RGB, OK (`done("#RRGGBB")`).
+    function colorPicker(into, start, done) {
+        const form = into.appendChild(el("form", "picker"));
+        const area = form.appendChild(el("div", "sv"));
+        const dot = area.appendChild(el("span", "knob"));
+        const hueBar = form.appendChild(el("div", "hue"));
+        const hueDot = hueBar.appendChild(el("span", "knob"));
+        for (const [k, label] of [[dot, "彩度と明るさ"], [hueDot, "色相"]]) {
+            k.tabIndex = 0;
+            k.setAttribute("role", "slider");
+            k.setAttribute("aria-label", label);
+        }
+        const row = form.appendChild(el("div", "pickrow"));
+        const mode = row.appendChild(el("select"));
+        mode.setAttribute("aria-label", "表記");
+        for (const [v, label] of [["hex", "Hex"], ["rgb", "RGB"]]) mode.appendChild(el("option", null, label)).value = v;
+        const box = row.appendChild(el("label", "pickvalue"));
+        const hash = box.appendChild(el("span", "hash", "#"));
+        const input = box.appendChild(el("input"));
+        input.type = "text";
+        input.spellcheck = false;
+        input.setAttribute("aria-label", "色");
+        const foot = form.appendChild(el("div", "pickfoot"));
+        const sample = foot.appendChild(el("span", "picksample"));
+        const ok = foot.appendChild(el("button", "ok", "OK"));
+        ok.type = "submit";
+        // The color as hue (0-360), saturation and value (0-1).
+        let [h, sat, val] = hexToHsv(start);
+        const hex = () => hsvToHex(h, sat, val);
+        const show = (typed) => {
+            area.style.background = `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, hsl(${h}, 100%, 50%))`;
+            dot.style.left = `${sat * 100}%`;
+            dot.style.top = `${(1 - val) * 100}%`;
+            dot.style.background = hex();
+            hueDot.style.left = `${(h / 360) * 100}%`;
+            hueDot.style.background = `hsl(${h}, 100%, 50%)`;
+            sample.style.background = hex();
+            hash.hidden = mode.value !== "hex";
+            if (!typed) {
+                const c = hex();
+                input.value = mode.value === "hex" ? c.slice(1) : [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16)).join(", ");
+            }
+            input.setCustomValidity("");
+        };
+        // Dragged (or clicked) on the square or the bar.
+        const drag = (target, at) => {
+            target.addEventListener("pointerdown", (e) => {
+                e.preventDefault();
+                target.setPointerCapture(e.pointerId);
+                const move = (ev) => {
+                    const r = target.getBoundingClientRect();
+                    at(Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height)));
+                    show();
+                };
+                move(e);
+                (target === area ? dot : hueDot).focus();
+                const up = () => {
+                    target.removeEventListener("pointermove", move);
+                    target.removeEventListener("pointerup", up);
+                };
+                target.addEventListener("pointermove", move);
+                target.addEventListener("pointerup", up);
+            });
+        };
+        drag(area, (x, y) => ([sat, val] = [x, 1 - y]));
+        drag(hueBar, (x) => (h = Math.min(359.9, x * 360)));
+        const keys = (k, step) =>
+            k.addEventListener("keydown", (e) => {
+                const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
+                if (!d) return;
+                e.preventDefault();
+                e.stopPropagation();
+                step(d[0] * (e.shiftKey ? 10 : 1), d[1] * (e.shiftKey ? 10 : 1));
+                show();
+            });
+        keys(dot, (dx, dy) => {
+            sat = Math.min(1, Math.max(0, sat + dx / 100));
+            val = Math.min(1, Math.max(0, val + dy / 100));
+        });
+        keys(hueDot, (dx) => (h = Math.min(359.9, Math.max(0, h + dx))));
+        // Typed: as hex (RRGGBB, RGB) or as R, G, B.
+        const typed = () => {
+            const t = input.value.trim();
+            let c = null;
+            const m = /^#?([0-9a-f]{6}|[0-9a-f]{3})$/i.exec(t);
+            if (m) c = m[1].length === 3 ? m[1].replace(/./g, "$&$&") : m[1];
+            const n = t.split(/[\s,]+/).filter(Boolean).map(Number);
+            if (!c && n.length === 3 && n.every((x) => Number.isInteger(x) && x >= 0 && x <= 255)) c = n.map((x) => x.toString(16).padStart(2, "0")).join("");
+            return c && `#${c.toUpperCase()}`;
+        };
+        input.addEventListener("input", () => {
+            const c = typed();
+            if (!c) return;
+            [h, sat, val] = hexToHsv(c);
+            show(true);
+        });
+        mode.addEventListener("change", () => show());
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            if (document.activeElement === input && !typed()) {
+                input.setCustomValidity(mode.value === "hex" ? "RRGGBB の 16 進数で入力してください" : "0 から 255 の数を 3 つ入力してください");
+                input.reportValidity();
+                return;
+            }
+            done(hex());
+        });
+        show();
+        return form;
+    }
+    // A box of a color in a dialog (for <input type="color">, whose picker is the system's): its
+    // `value` ("#rrggbb"), `input` and `change` when another is picked in the page's picker.
+    function colorInput(start) {
+        const b = el("button", "colorinput");
+        b.type = "button";
+        const sw = b.appendChild(el("span", "sw"));
+        let value = "#000000";
+        Object.defineProperty(b, "value", {
+            get: () => value,
+            set: (v) => {
+                value = String(v).toLowerCase();
+                sw.style.background = value;
+                b.title = value.toUpperCase();
+            },
+        });
+        b.value = start || "#000000";
+        b.appendChild(el("span", "chev"));
+        b.addEventListener("click", () => {
+            const pop = openPop(b, "colors pickeronly");
+            colorPicker(pop, value, (color) => {
+                closeMenu();
+                b.value = color;
+                b.dispatchEvent(new Event("input", { bubbles: true }));
+                b.dispatchEvent(new Event("change", { bubbles: true }));
+                b.focus();
+            });
+        });
+        return b;
+    }
+    function hexToHsv(c) {
+        const m = /^#?([0-9a-f]{6})$/i.exec(c || "");
+        const [r, g, b] = m ? [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16) / 255) : [0, 0, 0];
+        const max = Math.max(r, g, b);
+        const d = max - Math.min(r, g, b);
+        let h = 0;
+        if (d) h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+        return [(h * 60 + 360) % 360, max ? d / max : 0, max];
+    }
+    function hsvToHex(h, s, v) {
+        const f = (n) => {
+            const k = (n + h / 60) % 6;
+            return Math.round((v - v * s * Math.max(0, Math.min(k, 4 - k, 1))) * 255);
+        };
+        return `#${[f(5), f(3), f(1)].map((x) => x.toString(16).padStart(2, "0")).join("").toUpperCase()}`;
     }
     // The borders of the ribbon's menu (as Excel's, in its groups) and the sides each draws: its
     // lines of the 線のスタイル chosen ("s"), thick ("t") or double ("d").
@@ -9141,7 +9291,7 @@
             if (o.icon) b.appendChild(icon(o.icon, o.large));
             if (o.text) b.appendChild(el("span", "glyph", o.text));
             const lbl = o.label && (o.large || o.showLabel) ? b.appendChild(el("span", "lbl", o.large ? o.label : o.label.replace(/\n/g, ""))) : null;
-            if (o.menu && !o.split) (o.large && lbl ? lbl : b).appendChild(el("span", "caret", "▾"));
+            if (o.menu && !o.split) (o.large && lbl ? lbl : b).appendChild(el("span", "caret chev"));
             if (o.edits && !editable) b.disabled = true;
             const openMenuOf = (anchor) => {
                 if (o.edits && busy) return;
@@ -9153,7 +9303,8 @@
             if (o.menu && !o.split) b.addEventListener("click", () => openMenuOf(wrap === into ? b : wrap));
             else b.addEventListener("click", () => run(b, o.act, o.edits, o.keepEntry || (o.chars && charTarget())));
             if (o.split) {
-                const more = wrap.appendChild(el("button", "rbtn more", "▾"));
+                const more = wrap.appendChild(el("button", "rbtn more"));
+                more.appendChild(el("span", "chev"));
                 more.type = "button";
                 more.title = o.moreTitle || o.title || (o.label || "").replace(/\n/g, "");
                 more.dataset.tool = `${key}More`;
@@ -9242,7 +9393,8 @@
         fontName.dataset.tool = "fontName";
         fontName.spellcheck = false;
         fontName.autocomplete = "off";
-        const fontDrop = fontBox.appendChild(el("button", "fontdrop", "▾"));
+        const fontDrop = fontBox.appendChild(el("button", "fontdrop"));
+        fontDrop.appendChild(el("span", "chev"));
         fontDrop.type = "button";
         fontDrop.title = "フォントの一覧";
         fontDrop.dataset.tool = "fontNameMore";
@@ -12120,7 +12272,7 @@
             rule || {},
         );
         const form = openDialog("データの入力規則", "validdlg");
-        const tabs = form.appendChild(el("div", "fmttabs"));
+        const tabs = form.appendChild(el("div", "fmttabs tablist"));
         const pages = {};
         const showTab = (key) => {
             for (const t of tabs.children) t.classList.toggle("on", t.dataset.tab === key);
@@ -12431,14 +12583,15 @@
         box.setAttribute("role", "dialog");
         box.dataset.vscodeContext = JSON.stringify({ preventDefaultContextMenuItems: false });
         const tabs = box.appendChild(el("div", "findtabs"));
+        const tabList = tabs.appendChild(el("div", "tablist"));
         const tab = (label, on, act) => {
-            const b = tabs.appendChild(el("button", on ? "on" : null, label));
+            const b = tabList.appendChild(el("button", on ? "on" : null, label));
             b.type = "button";
             b.addEventListener("click", act);
         };
         tab("検索", !finder.replace, () => openFind(false));
         if (editable) tab("置換", finder.replace, () => openFind(true));
-        const close = tabs.appendChild(el("button", "x", "×"));
+        const close = tabs.appendChild(el("button", "x iconbtn", "×"));
         close.type = "button";
         close.title = "閉じる（Esc）";
         close.addEventListener("click", closeFind);
