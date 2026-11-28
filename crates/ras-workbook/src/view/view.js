@@ -4749,8 +4749,9 @@
         for (const b of pane.querySelectorAll(".pitem")) b.classList.toggle("on", isSelected(b.obj));
     }
     // The format of an object, as Excel's 図形の書式設定: its pages by the icons of one row of tabs
-    // (塗りつぶしと線, 効果, サイズとプロパティ, 文字), their sections folded by their headings;
-    // each value is set as it is changed.
+    // (文字, 塗りつぶしと線, 効果, サイズとプロパティ: 文字 before 塗りつぶし, as the pages of
+    // セルの書式設定 are), their sections folded by their headings; each value is set as it is
+    // changed.
     const PANE_ICONS = {
         fill: '<path d="m2.5 7.5 5-5 5 5-5 5z"/><path d="M4 9h7"/><path d="M13.3 9.5c.8 1.2 1.2 2 1.2 2.5a1.2 1.2 0 0 1-2.4 0c0-.5.4-1.3 1.2-2.5z"/><path d="M1.5 15h13" stroke-width="2"/>',
         effects: '<path d="M8 1.8 14.2 6.3 11.8 13.5H4.2L1.8 6.3z"/>',
@@ -4759,10 +4760,10 @@
         code: '<path d="M5.5 4 1.5 8l4 4M10.5 4l4 4-4 4M9.2 2.5l-2.4 11"/>',
     };
     const PANE_PAGES = [
+        ["text", "文字"],
         ["fill", "塗りつぶしと線"],
         ["effects", "効果"],
         ["size", "サイズとプロパティ"],
-        ["text", "文字"],
         ["code", "コード"],
     ];
     // The sections folded (by their heading), as long as the page is open.
@@ -5257,12 +5258,14 @@
                 fb.addEventListener("click", () => objectEdit(obj, flipChange(obj, vertical)));
             }
         }
+        // (An ActiveX control's AutoSize: its size by what it shows.)
+        if (ax && f.enabled !== undefined && !["ListBox", "SpinButton", "ScrollBar"].includes(t)) kit.checkRow(size, "自動サイズ（AutoSize）", f.autoSize, "autoSize", (on) => edit({ autoSize: on }));
 
-        // プロパティ: オブジェクトの位置関係, オブジェクトを印刷する, ロック, テキストをロックする
+        // プロパティ (オブジェクトの位置関係, オブジェクトを印刷する) and 保護 (ロック, 文字列のロック),
+        // named as the cells' 保護 is.
         const props = obj.props;
         if (props) {
-            // (A control's own settings follow: these are Excel's 保護 and プロパティ.)
-            const sec = section("size", isControl(obj) ? "保護とプロパティ" : "プロパティ");
+            const sec = section("size", "プロパティ");
             choices(
                 sec,
                 [
@@ -5273,18 +5276,10 @@
                 props.placement,
                 (v) => edit({ placement: v }),
             );
-            const check = (label, key, field) => {
-                const row = sec.appendChild(el("label", "prow pcheck"));
-                const on = row.appendChild(el("input"));
-                on.type = "checkbox";
-                on.checked = !!props[key];
-                on.dataset.field = field;
-                row.appendChild(el("span", null, label));
-                on.addEventListener("change", () => edit({ [field]: on.checked }));
-            };
-            check("オブジェクトを印刷する", "print", "print");
-            check("ロック", "locked", "locked");
-            if (props.lockText !== null && props.lockText !== undefined) check(isControl(obj) ? "文字列のロック" : "テキストをロックする", "lockText", "lockText");
+            kit.checkRow(sec, "オブジェクトを印刷する", props.print, "print", (on) => edit({ print: on }));
+            const lock = section("size", "保護");
+            kit.checkRow(lock, "ロック", props.locked, "locked", (on) => edit({ locked: on }));
+            if (props.lockText !== null && props.lockText !== undefined) kit.checkRow(lock, "文字列のロック", props.lockText, "lockText", (on) => edit({ lockText: on }));
         }
         // 代替テキスト (a control's)
         if (isControl(obj) && f.altText !== undefined) {
@@ -5310,7 +5305,7 @@
 
         // コントロール: what its kind has (the linked cell, the items, the state, the values)
         if (isControl(obj) && obj.form) {
-            const sec = section("size", ax ? "プロパティ" : "コントロール");
+            const sec = section("size", "コントロール");
             if (["CheckBox", "Radio", "OptionButton", "ToggleButton"].includes(t)) {
                 const row = sec.appendChild(el("label", "prow pcheck"));
                 const on = row.appendChild(el("input"));
@@ -5345,17 +5340,13 @@
                 if (t === "Scroll" || t === "ScrollBar") numbers.push([ax ? "LargeChange" : "ページ単位の変化", "page", "page"]);
                 for (const [label, key, op] of numbers) number(label, key, op, !ax);
             }
-            // An ActiveX control's Enabled, WordWrap, AutoSize.
-            if (ax && f.enabled !== undefined) {
-                kit.checkRow(sec, "有効（Enabled）", f.enabled, "enabled", (on) => edit({ enabled: on }));
-                if (!["ListBox", "ComboBox", "SpinButton", "ScrollBar"].includes(t)) kit.checkRow(sec, "折り返し（WordWrap）", f.wordWrap, "wordWrap", (on) => edit({ wordWrap: on }));
-                if (!["ListBox", "SpinButton", "ScrollBar"].includes(t)) kit.checkRow(sec, "自動サイズ（AutoSize）", f.autoSize, "autoSize", (on) => edit({ autoSize: on }));
-            }
+            // An ActiveX control's Enabled (WordWrap is 文字の制御's, AutoSize サイズ's).
+            if (ax && f.enabled !== undefined) kit.checkRow(sec, "有効（Enabled）", f.enabled, "enabled", (on) => edit({ enabled: on }));
             if (!sec.querySelector(".prow")) sec.parentNode.remove();
         }
 
-        // コード: its name and how the code refers to it, its events, its properties (as the
-        // object model has them, as a browser's developer tools list an element's)
+        // コード: its name and how the code refers to it, its events, its properties (オブジェクト
+        // モデル: as the object model has them, as a browser's developer tools list an element's)
         {
             const sec = section("code", "オブジェクト");
             const named = (label, value, title) => {
@@ -5379,36 +5370,38 @@
                 mb.addEventListener("click", act);
             }
         }
-        propertyTree(section("code", "プロパティ"), obj);
+        propertyTree(section("code", "オブジェクト モデル"), obj);
 
-        // 文字 > テキスト ボックス: 垂直方向の配置, the margins, 図形内でテキストを折り返す (the
-        // text itself is typed in the shape)
+        // 文字: the text of a control (its caption or value), then what the cells' 文字 has, in
+        // its order and by its names: フォント, 文字飾り, 文字の配置, 文字の制御, and 余白. (A
+        // shape's text is typed in the shape.)
         const tb = obj.textBox;
-        if (tb) {
-            const sec = section("text", "テキスト ボックス");
-            const row = line(sec, "垂直方向の配置");
-            const anchor = row.appendChild(el("select"));
-            anchor.dataset.field = "textAnchor";
-            for (const [v, label] of [["t", "上揃え"], ["ctr", "上下中央揃え"], ["b", "下揃え"]]) anchor.appendChild(el("option", null, label)).value = v;
-            anchor.value = tb.anchor;
-            anchor.addEventListener("change", () => edit({ textAnchor: anchor.value }));
-            const cm = (pt) => Math.round(((pt * 2.54) / 72) * 100) / 100;
-            [["left", "左余白", 0], ["right", "右余白", 2], ["top", "上余白", 1], ["bottom", "下余白", 3]].forEach(([key, label, i]) => {
-                const m = sizeBox(line(sec, label), label, (v) => edit({ inset: { [key]: Math.round(((v * 72) / 2.54) * 100) / 100 } }), { step: 0.05, max: 50 });
-                m.input.dataset.field = `inset-${key}`;
-                m.setCm(cm(tb.inset[i]));
+        if (obj.text !== undefined && !tb) {
+            const sec = section("text", ax ? (["TextBox", "ListBox", "ComboBox"].includes(t) ? "文字（Value）" : "文字（Caption）") : "文字");
+            const text = sec.appendChild(el("textarea", "ptext"));
+            text.rows = 4;
+            text.value = obj.text;
+            text.dataset.field = "text";
+            text.title = "Ctrl+Enter で確定";
+            const commit = () => {
+                if (text.value !== obj.text) edit({ text: text.value });
+            };
+            text.addEventListener("change", commit);
+            text.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    text.blur();
+                    focusGrid();
+                } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    text.value = obj.text;
+                    focusGrid();
+                }
             });
-            const wrap = sec.appendChild(el("label", "prow pcheck"));
-            const on = wrap.appendChild(el("input"));
-            on.type = "checkbox";
-            on.checked = !!tb.wrap;
-            on.dataset.field = "textWrap";
-            wrap.appendChild(el("span", null, "図形内でテキストを折り返す"));
-            on.addEventListener("change", () => edit({ textWrap: on.checked }));
         }
 
-        // 文字 > フォント: a control's font (an ActiveX control's Font, a form button's) and its
-        // color (ForeColor)
+        // 文字 > フォント, 文字飾り: a control's font (an ActiveX control's Font, a form button's)
+        // and its color (ForeColor)
         if (isControl(obj) && f.font) {
             const fn = f.font;
             const font = (v) => edit({ font: v });
@@ -5448,51 +5441,39 @@
             const size = sizeBox(line(sec, "サイズ"), "フォント サイズ", (n) => n > 0 && n !== fn.size && font({ size: n }), { name: "pt", step: 1, min: 1, max: 409 });
             size.input.dataset.field = "fontSize";
             size.setCm(fn.size);
-            kit.checkRow(sec, "下線", fn.underline, "underline", (on) => font({ underline: on }));
-            kit.checkRow(sec, "取り消し線", fn.strike, "strike", (on) => font({ strike: on }));
-            kit.colorRow(sec, "文字の色", f.foreColor || null, ax ? "既定の色" : "自動", (c) => edit({ foreColor: c }), "foreColor");
-        }
-        // 文字 > 配置, 余白: a form button's (横位置, 縦位置; 余白 自動 or 左・右・上・下)
-        if (isControl(obj) && !ax && f.textAlign !== undefined) {
-            const sec = section("text", "文字の配置");
-            const ends = [["justify", "両端揃え"], ["distributed", "均等割り付け"]];
-            kit.selectRow(sec, "横位置", [["left", "左揃え"], ["center", "中央揃え"], ["right", "右揃え"], ...ends], f.textAlign, "textAlign", (v) => edit({ textAlign: v }));
-            kit.selectRow(sec, "縦位置", [["top", "上揃え"], ["center", "中央揃え"], ["bottom", "下揃え"], ...ends], f.textVAlign, "textVAlign", (v) => edit({ textVAlign: v }));
-            const margin = section("text", "余白");
-            kit.checkRow(margin, "自動", f.insetAuto, "insetAuto", (on) => edit(on ? { insetAuto: true } : { inset: { left: f.inset[0], top: f.inset[1], right: f.inset[2], bottom: f.inset[3] } }));
-            if (!f.insetAuto) {
-                const cm = (pt) => Math.round(((pt * 2.54) / 72) * 100) / 100;
-                [["left", "左", 0], ["right", "右", 2], ["top", "上", 1], ["bottom", "下", 3]].forEach(([key, label, i]) => {
-                    const m = sizeBox(line(margin, label), `${label}余白`, (v) => edit({ inset: { [key]: Math.round(((v * 72) / 2.54) * 100) / 100 } }), { step: 0.05, max: 50 });
-                    m.input.dataset.field = `inset-${key}`;
-                    m.setCm(cm(f.inset[i]));
-                });
-            }
+            // (A control's underline is one line or none.)
+            kit.selectRow(sec, "下線", UNDERLINES.slice(0, 2), fn.underline ? "single" : "none", "underline", (v) => font({ underline: v === "single" }));
+            kit.colorRow(sec, "色", f.foreColor || null, ax ? "既定の色" : "自動", (c) => edit({ foreColor: c }), "foreColor");
+            kit.checkRow(section("text", "文字飾り"), "取り消し線", fn.strike, "strike", (on) => font({ strike: on }));
         }
 
-        // 文字: the text of a control (its caption or value)
-        if (obj.text !== undefined && !tb) {
-            const sec = section("text", ax && ["TextBox", "ListBox", "ComboBox"].includes(t) ? "値（Value）" : ax ? "Caption" : "文字");
-            const text = sec.appendChild(el("textarea", "ptext"));
-            text.rows = 4;
-            text.value = obj.text;
-            text.dataset.field = "text";
-            text.title = "Ctrl+Enter で確定";
-            const commit = () => {
-                if (text.value !== obj.text) edit({ text: text.value });
-            };
-            text.addEventListener("change", commit);
-            text.addEventListener("keydown", (e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault();
-                    text.blur();
-                    focusGrid();
-                } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    text.value = obj.text;
-                    focusGrid();
-                }
-            });
+        // 文字 > 文字の配置: a shape's text box (縦位置), a form button's (横位置, 縦位置)
+        const button = isControl(obj) && !ax && f.textAlign !== undefined;
+        if (tb) {
+            kit.selectRow(section("text", "文字の配置"), "縦位置", [["t", "上揃え"], ["ctr", "上下中央揃え"], ["b", "下揃え"]], tb.anchor, "textAnchor", (v) => edit({ textAnchor: v }), "pwide");
+        } else if (button) {
+            const sec = section("text", "文字の配置");
+            const ends = [["justify", "両端揃え"], ["distributed", "均等割り付け"]];
+            kit.selectRow(sec, "横位置", [["left", "左揃え"], ["center", "中央揃え"], ["right", "右揃え"], ...ends], f.textAlign, "textAlign", (v) => edit({ textAlign: v }), "pwide");
+            kit.selectRow(sec, "縦位置", [["top", "上揃え"], ["center", "上下中央揃え"], ["bottom", "下揃え"], ...ends], f.textVAlign, "textVAlign", (v) => edit({ textVAlign: v }), "pwide");
+        }
+        // 文字 > 文字の制御: 図形内でテキストを折り返す (a shape's text box), an ActiveX control's
+        // WordWrap
+        if (tb) kit.checkRow(section("text", "文字の制御"), "図形内でテキストを折り返す", tb.wrap, "textWrap", (on) => edit({ textWrap: on }));
+        else if (ax && f.enabled !== undefined && !["ListBox", "ComboBox", "SpinButton", "ScrollBar"].includes(t)) kit.checkRow(section("text", "文字の制御"), "折り返し（WordWrap）", f.wordWrap, "wordWrap", (on) => edit({ wordWrap: on }));
+        // 文字 > 余白: 左・右・上・下 (cm) of a shape's text box, or of a form button (自動, or its own)
+        if (tb || button) {
+            const sec = section("text", "余白");
+            const inset = tb ? tb.inset : f.inset;
+            if (button) kit.checkRow(sec, "自動", f.insetAuto, "insetAuto", (on) => edit(on ? { insetAuto: true } : { inset: { left: inset[0], top: inset[1], right: inset[2], bottom: inset[3] } }));
+            if (tb || !f.insetAuto) {
+                const cm = (pt) => Math.round(((pt * 2.54) / 72) * 100) / 100;
+                [["left", "左", 0], ["right", "右", 2], ["top", "上", 1], ["bottom", "下", 3]].forEach(([key, label, i]) => {
+                    const m = sizeBox(line(sec, label), `${label}余白`, (v) => edit({ inset: { [key]: Math.round(((v * 72) / 2.54) * 100) / 100 } }), { step: 0.05, max: 50 });
+                    m.input.dataset.field = `inset-${key}`;
+                    m.setCm(cm(inset[i]));
+                });
+            }
         }
 
         kit.finish(PANE_PAGES, PANE_ICONS, "panePage", focus);
@@ -5500,38 +5481,38 @@
 
     // ---- セルの書式設定 (Ctrl+1): the formats of the cells selected in the pane at the right, as
     // Excel's dialog has them (表示形式, 配置, フォント, 罫線, 塗りつぶし, 保護) but with the
-    // controls of 図形の書式設定 (表示形式 and 配置 on one page, フォント and 塗りつぶし on
-    // another); each is set as it is
+    // controls of 図形の書式設定 and its pages: 表示形式, 文字 (フォント and 配置, as an object's
+    // 文字), 塗りつぶしと罫線 (as an object's 塗りつぶしと線), プロパティ; each is set as it is
     // changed. Shown for the active cell (the borders: for the range), as Excel's dialog opens.
     // プロパティ has 保護 and what the cells selected are in: the rules of 条件付き書式 and the
     // names defined.
 
     const CELL_PAGES = [
-        ["number", "表示形式と配置"],
-        ["font", "フォントと塗りつぶし"],
-        ["border", "罫線"],
+        ["number", "表示形式"],
+        ["font", "文字"],
+        ["fill", "塗りつぶしと罫線"],
         ["props", "プロパティ"],
     ];
     const CELL_ICONS = {
         number: '<path d="M6.2 2.5 4.6 13.5M11.4 2.5 9.8 13.5M2.5 5.8h11.5M2 10.2h11.5"/>',
         font: PANE_ICONS.text,
-        border: '<path d="M2.5 2.5h11v11h-11z"/><path d="M8 2.5v11M2.5 8h11" stroke-dasharray="1 1.6"/>',
+        fill: PANE_ICONS.fill,
         props: '<rect x="2.5" y="1.5" width="11" height="13" rx="1"/><path d="M5 5h1M5 8h1M5 11h1M8 5h3M8 8h3M8 11h3"/>',
     };
     const H_ALIGNS = [
         ["general", "標準"],
-        ["left", "左詰め (インデント)"],
+        ["left", "左揃え"],
         ["center", "中央揃え"],
-        ["right", "右詰め (インデント)"],
+        ["right", "右揃え"],
         ["fill", "繰り返し"],
         ["justify", "両端揃え"],
         ["centerContinuous", "選択範囲内で中央"],
-        ["distributed", "均等割り付け (インデント)"],
+        ["distributed", "均等割り付け"],
     ];
     const V_ALIGNS = [
-        ["top", "上詰め"],
-        ["center", "中央揃え"],
-        ["bottom", "下詰め"],
+        ["top", "上揃え"],
+        ["center", "上下中央揃え"],
+        ["bottom", "下揃え"],
         ["justify", "両端揃え"],
         ["distributed", "均等割り付け"],
     ];
@@ -5754,33 +5735,8 @@
             });
         }
 
-        // 配置: 文字の配置, 文字の制御, 方向, 右から左
-        {
-            const sec = section("number", "文字の配置");
-            const h = fm.h || "general";
-            selectRow(sec, "横位置", H_ALIGNS, h, "hAlign", (v) => set({ align: v }), "pwide");
-            // (An indent makes 標準 and 中央揃え 左詰め, as in Excel.)
-            const indented = ["left", "right", "distributed"].includes(h);
-            spin(sec, "インデント", "indent", fm.indent || 0, (n) => set(indented ? { indent: Math.round(n) } : { align: "left", indent: Math.round(n) }), { name: "", step: 1, max: 250 });
-            selectRow(sec, "縦位置", V_ALIGNS, fm.v || "bottom", "vAlign", (v) => set({ valign: v === "center" ? "middle" : v }), "pwide");
-            const ctl = section("number", "文字の制御");
-            checkRow(ctl, "折り返して全体を表示する", fm.wrap, "wrap", (on) => set({ wrap: on }));
-            checkRow(ctl, "縮小して全体を表示する", fm.shrink, "shrink", (on) => set({ shrink: on })).disabled = !!fm.wrap;
-            const merged = mergedIn(sel);
-            const m = checkRow(ctl, "セルを結合する", merged, "merge", (on) => merge(on ? "merge" : "unmerge"));
-            m.disabled = sel.kind === "all" || areas.length > 0 || (!merged && single(sel));
-            const dir = section("number", "方向");
-            const rot = fm.rot || 0;
-            const vertical = rot === 255;
-            checkRow(dir, "縦書き", vertical, "vertical", (on) => set({ orientation: on ? "vertical" : 0 }));
-            const angle = spin(dir, "角度", "orientation", vertical ? 0 : rot <= 90 ? rot : 90 - rot, (d) => set({ orientation: Math.round(d) }), { name: "°", step: 1, min: -90, max: 90 });
-            angle.input.disabled = vertical;
-            const rtl = section("number", "右から左");
-            selectRow(rtl, "文字の方向", [["context", "コンテキスト"], ["ltr", "左から右"], ["rtl", "右から左"]], ["context", "ltr", "rtl"][fm.ro || 0] || "context", "readingOrder", (v) => set({ readingOrder: v }), "pwide");
-        }
-
-        // フォントと塗りつぶし: フォント (フォント名, スタイル, サイズ, 下線, 色, 標準フォント),
-        // 文字飾り, 塗りつぶし, and プレビュー of both (after 塗りつぶし).
+        // 文字: フォント (フォント名, スタイル, サイズ, 下線, 色, 標準フォント), 文字飾り, and
+        // プレビュー of them over the fill (set below, with 塗りつぶし).
         const preview = el("div", "ppreview");
         {
             const book = bookFont(view.sheet);
@@ -5842,6 +5798,82 @@
                 color: fm.color || "#000000",
                 verticalAlign: fm.va === "superscript" ? "super" : fm.va === "subscript" ? "sub" : "baseline",
             });
+            section("font", "プレビュー").appendChild(preview);
+        }
+
+        // 文字 > 配置: 文字の配置, 文字の制御, 方向, 右から左
+        {
+            const sec = section("font", "文字の配置");
+            const h = fm.h || "general";
+            selectRow(sec, "横位置", H_ALIGNS, h, "hAlign", (v) => set({ align: v }), "pwide");
+            // (An indent makes 標準 and 中央揃え 左揃え, as in Excel.)
+            const indented = ["left", "right", "distributed"].includes(h);
+            spin(sec, "インデント", "indent", fm.indent || 0, (n) => set(indented ? { indent: Math.round(n) } : { align: "left", indent: Math.round(n) }), { name: "", step: 1, max: 250 });
+            selectRow(sec, "縦位置", V_ALIGNS, fm.v || "bottom", "vAlign", (v) => set({ valign: v === "center" ? "middle" : v }), "pwide");
+            const ctl = section("font", "文字の制御");
+            checkRow(ctl, "折り返して全体を表示する", fm.wrap, "wrap", (on) => set({ wrap: on }));
+            checkRow(ctl, "縮小して全体を表示する", fm.shrink, "shrink", (on) => set({ shrink: on })).disabled = !!fm.wrap;
+            const merged = mergedIn(sel);
+            const m = checkRow(ctl, "セルを結合する", merged, "merge", (on) => merge(on ? "merge" : "unmerge"));
+            m.disabled = sel.kind === "all" || areas.length > 0 || (!merged && single(sel));
+            const dir = section("font", "方向");
+            const rot = fm.rot || 0;
+            const vertical = rot === 255;
+            checkRow(dir, "縦書き", vertical, "vertical", (on) => set({ orientation: on ? "vertical" : 0 }));
+            const angle = spin(dir, "角度", "orientation", vertical ? 0 : rot <= 90 ? rot : 90 - rot, (d) => set({ orientation: Math.round(d) }), { name: "°", step: 1, min: -90, max: 90 });
+            angle.input.disabled = vertical;
+            const rtl = section("font", "右から左");
+            selectRow(rtl, "文字の方向", [["context", "コンテキスト"], ["ltr", "左から右"], ["rtl", "右から左"]], ["context", "ltr", "rtl"][fm.ro || 0] || "context", "readingOrder", (v) => set({ readingOrder: v }), "pwide");
+        }
+
+        // 塗りつぶしと罫線 > 塗りつぶし: 背景色, パターンの色, パターンの種類 (shown in 文字's
+        // プレビュー too)
+        {
+            const fill = fm.fill || null;
+            const pattern = fill ? fill.pattern : "none";
+            const plain = pattern === "none" || pattern === "solid";
+            const bg = !fill ? null : pattern === "solid" ? fill.fg : fill.bg;
+            const fg = plain ? (saved.patternColor ?? null) : fill.fg;
+            const put = (p, color, background) => set({ pattern: { pattern: p, color, background } });
+            const sec = section("fill", "塗りつぶし");
+            colorRow(sec, "背景色", bg, "色なし", (c) => (plain ? put(c ? "solid" : "none", c, null) : put(pattern, fg, c)), "fillColor");
+            colorRow(sec, "パターンの色", fg, "自動", (c) => {
+                if (!plain) return put(pattern, c, bg);
+                // (No pattern yet: the one chosen next is drawn in it.)
+                remember({ patternColor: c });
+                renderPane("patternColor");
+            }, "patternColor");
+            const row = line(sec, "パターンの種類");
+            const kind = row.appendChild(el("button", "pcolor"));
+            kind.type = "button";
+            kind.dataset.field = "pattern";
+            const name = plain ? "なし" : (FILL_PATTERNS.find((p) => p[0] === pattern) || [, pattern])[1];
+            kind.title = `パターンの種類（${name}）`;
+            const sw = kind.appendChild(el("span", "sw ptile"));
+            if (plain) {
+                sw.classList.add("none");
+                kind.appendChild(el("span", "pctext", "なし"));
+            } else sw.style.cssText = fillCss(pattern, fg, bg);
+            kind.appendChild(el("span", "pdrop chev"));
+            kind.addEventListener("click", () => {
+                const pop = openPop(kind, "patterns");
+                const tiles = pop.appendChild(el("div", "swatches"));
+                for (const [key, label] of FILL_PATTERNS) {
+                    const b = tiles.appendChild(el("button", "swatch"));
+                    b.type = "button";
+                    b.title = label;
+                    b.dataset.pattern = key;
+                    b.style.cssText = key === "solid" ? "background:#FFFFFF" : fillCss(key, "#000000", "#FFFFFF");
+                    b.classList.toggle("on", key === pattern || (key === "solid" && plain));
+                    b.addEventListener("click", () => {
+                        closeMenu();
+                        focusGrid();
+                        if (key === "solid") put(bg ? "solid" : "none", bg, null);
+                        else put(key, fg, bg);
+                    });
+                }
+            });
+            preview.style.cssText = fillCss(pattern, pattern === "solid" ? bg : fg, bg);
         }
 
         // 罫線: one section, as each effect of 図形の書式設定 is: the line and its color (what the
@@ -5850,7 +5882,7 @@
         {
             const sides = bordersOf(sel);
             const many = { v: !single(sel) && sel.c2 > sel.c1, h: !single(sel) && sel.r2 > sel.r1 };
-            const box = section("border", "罫線");
+            const box = section("fill", "罫線");
             const row = line(box, "スタイル");
             const pick = row.appendChild(el("button", "pcolor pline"));
             pick.type = "button";
@@ -5982,56 +6014,6 @@
             box.appendChild(el("div", "pnote", "選んだスタイルと色で、プリセットや周りのボタン、図のクリックで罫線を引きます（同じ罫線をもう一度クリックすると消えます）。"));
         }
 
-        // 塗りつぶし: 背景色, パターンの色, パターンの種類 (shown in プレビュー)
-        {
-            const fill = fm.fill || null;
-            const pattern = fill ? fill.pattern : "none";
-            const plain = pattern === "none" || pattern === "solid";
-            const bg = !fill ? null : pattern === "solid" ? fill.fg : fill.bg;
-            const fg = plain ? (saved.patternColor ?? null) : fill.fg;
-            const put = (p, color, background) => set({ pattern: { pattern: p, color, background } });
-            const sec = section("font", "塗りつぶし");
-            colorRow(sec, "背景色", bg, "色なし", (c) => (plain ? put(c ? "solid" : "none", c, null) : put(pattern, fg, c)), "fillColor");
-            colorRow(sec, "パターンの色", fg, "自動", (c) => {
-                if (!plain) return put(pattern, c, bg);
-                // (No pattern yet: the one chosen next is drawn in it.)
-                remember({ patternColor: c });
-                renderPane("patternColor");
-            }, "patternColor");
-            const row = line(sec, "パターンの種類");
-            const kind = row.appendChild(el("button", "pcolor"));
-            kind.type = "button";
-            kind.dataset.field = "pattern";
-            const name = plain ? "なし" : (FILL_PATTERNS.find((p) => p[0] === pattern) || [, pattern])[1];
-            kind.title = `パターンの種類（${name}）`;
-            const sw = kind.appendChild(el("span", "sw ptile"));
-            if (plain) {
-                sw.classList.add("none");
-                kind.appendChild(el("span", "pctext", "なし"));
-            } else sw.style.cssText = fillCss(pattern, fg, bg);
-            kind.appendChild(el("span", "pdrop chev"));
-            kind.addEventListener("click", () => {
-                const pop = openPop(kind, "patterns");
-                const tiles = pop.appendChild(el("div", "swatches"));
-                for (const [key, label] of FILL_PATTERNS) {
-                    const b = tiles.appendChild(el("button", "swatch"));
-                    b.type = "button";
-                    b.title = label;
-                    b.dataset.pattern = key;
-                    b.style.cssText = key === "solid" ? "background:#FFFFFF" : fillCss(key, "#000000", "#FFFFFF");
-                    b.classList.toggle("on", key === pattern || (key === "solid" && plain));
-                    b.addEventListener("click", () => {
-                        closeMenu();
-                        focusGrid();
-                        if (key === "solid") put(bg ? "solid" : "none", bg, null);
-                        else put(key, fg, bg);
-                    });
-                }
-            });
-            preview.style.cssText = fillCss(pattern, pattern === "solid" ? bg : fg, bg);
-            section("font", "プレビュー").appendChild(preview);
-        }
-
         // プロパティ > 保護: ロック, 表示しない (what they do on a protected sheet)
         {
             const sec = section("props", "保護");
@@ -6097,8 +6079,8 @@
             if (!named.length) list.appendChild(el("div", "pnone", "選択範囲を参照する名前はありません。"));
         }
 
-        // (The pages that were 配置, 塗りつぶし and 保護 are those that have them now.)
-        const was = { align: "number", fill: "font", protect: "props" }[saved.cellPage];
+        // (The pages that were 配置, 罫線 and 保護 are those that have them now.)
+        const was = { align: "font", border: "fill", protect: "props" }[saved.cellPage];
         if (was) remember({ cellPage: was });
         kit.finish(CELL_PAGES, CELL_ICONS, "cellPage", focus);
         // (Once its page shows: a list hidden is not scrolled.)
@@ -6920,15 +6902,15 @@
         return form;
     }
     // "セルの書式設定" of a rule's format, over the rule's dialog, as the pane's of the cells has
-    // it: 表示形式; フォント (スタイル・下線・色), 文字飾り (取り消し線) and 塗りつぶし (背景色・
-    // パターン); 罫線 (each side, of a line and its color). Each item is 設定なし (the cell's own
+    // it: 表示形式; 文字 (フォント (スタイル・下線・色), 文字飾り (取り消し線)); 塗りつぶしと罫線
+    // (塗りつぶし (背景色・パターン), 罫線 (each side, of a line and its color)). Each item is 設定なし (the cell's own
     // shows) until it is set, and taken back to it by the button at the end of its row; クリア
     // takes all back. (As Excel's: a rule's font and size are not set; nor 上付き・下付き.)
     // `done(f)`: the format set (null: none); `cancelled()`: closed without it.
     const COND_FMT_PAGES = [
         ["number", "表示形式"],
-        ["font", "フォントと塗りつぶし"],
-        ["border", "罫線"],
+        ["font", "文字"],
+        ["fill", "塗りつぶしと罫線"],
     ];
     // The lines a rule's border can have (as Excel's dialog of a rule lists them).
     const COND_LINES = ["thin", "hair", "dotted", "dashDotDot", "dashDot", "dashed"];
@@ -7030,7 +7012,7 @@
 
             // 塗りつぶし: 背景色, パターンの色, パターンの種類
             {
-                const sec = section("font", "塗りつぶし");
+                const sec = section("fill", "塗りつぶし");
                 const pattern = f.pattern || null;
                 const bg = colorRow(sec, "背景色", f.fill || null, "設定なし", (c) => put({ fill: c }, "fillColor"), "fillColor");
                 reset(bg, has("fill"), "背景色", { fill: null });
@@ -7073,7 +7055,7 @@
             // preset, by the buttons around the picture of the cell, or by the picture clicked.
             {
                 const sides = f.borders || {};
-                const box = section("border", "罫線");
+                const box = section("fill", "罫線");
                 const row = line(box, "スタイル");
                 const pick = row.appendChild(el("button", "pcolor pline"));
                 pick.type = "button";
